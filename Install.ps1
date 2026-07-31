@@ -1,0 +1,141 @@
+﻿$ErrorActionPreference = 'Continue'
+
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "[INFO] Requesting Administrator Privileges..." -ForegroundColor Yellow
+    $scriptContent = (New-Object System.Net.WebClient).DownloadString("https://raw.githubusercontent.com/Bersa96/-it-toolkit/main/Install.ps1")
+    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"$scriptContent`"" -Verb RunAs
+    exit
+}
+
+while ($true) {
+    Clear-Host
+    Write-Host "=========================================================================" -ForegroundColor Cyan
+    Write-Host "                    IT SUPPORT TOOLKIT - MAIN MENU                       " -ForegroundColor Cyan
+    Write-Host "=========================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "   [1] Install Standard Apps (WhatsApp, Chrome, Acrobat, 7-Zip, AnyDesk, Zoom)"
+    Write-Host "   [2] Apply Windows 11 Tweaks (Dark Mode, File Explorer, End Task & Privacy)"
+    Write-Host "   [3] Repair System Corruption (SFC & DISM RestoreHealth)"
+    Write-Host "   [4] Repair Print Spooler Queue"
+    Write-Host "   [5] Network Reset & Flush DNS"
+    Write-Host "   [6] Block Windows Auto-Update"
+    Write-Host ""
+    Write-Host "   [0] Exit" -ForegroundColor Red
+    Write-Host "=========================================================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    $choice = Read-Host "Select option (0-6)"
+
+    switch ($choice) {
+        "1" {
+            Write-Host "`nInstalling Standard Apps..." -ForegroundColor Yellow
+            
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+
+            $apps = @(
+                @{ id = "WhatsApp.WhatsApp";               url = "https://desktop.whatsapp.com/releases/WinX64/WhatsAppSetup.exe"; out = "$env:TEMP\WA.exe"; args = "/silent" },
+                @{ id = "Google.Chrome";                  url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"; out = "$env:TEMP\Chrome.exe"; args = "/silent /install" },
+                @{ id = "Adobe.Acrobat.Reader.64-bit";    url = "https://ardownload2.adobe.com/pub/adobe/reader/win/AcrobatDC/2400120604/AcroRdrDC2400120604_en_US.exe"; out = "$env:TEMP\Acrobat.exe"; args = "/sAll /rs" },
+                @{ id = "geekwright.PDF24";               url = "https://download.pdf24.org/pdf24-creator-11.15.2-x64.exe"; out = "$env:TEMP\PDF24.exe"; args = "/VERYSILENT /NORESTART" },
+                @{ id = "7zip.7zip";                      url = "https://www.7-zip.org/a/7z2408-x64.exe"; out = "$env:TEMP\7zip.exe"; args = "/S" },
+                @{ id = "VideoLAN.VLC";                   url = "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe"; out = "$env:TEMP\VLC.exe"; args = "/S" },
+                @{ id = "AnyDeskSoftwareGmbH.AnyDesk";   url = "https://download.anydesk.com/AnyDesk.exe"; out = "$env:TEMP\AnyDesk.exe"; args = "--install `"C:\Program Files (x86)\AnyDesk`" --start-with-win --silent" },
+                @{ id = "Zoom.Zoom";                      url = "https://zoom.us/client/latest/ZoomInstaller.exe"; out = "$env:TEMP\Zoom.exe"; args = "/silent" },
+                @{ id = "Notion.Notion";                  url = "https://www.notion.so/desktop/windows/download"; out = "$env:TEMP\Notion.exe"; args = "/S" }
+            )
+
+            foreach ($app in $apps) {
+                Write-Host "Installing $($app.id)..." -ForegroundColor Yellow
+                
+                $installed = $false
+                $wingetRes = & winget install --id $app.id --silent --accept-package-agreements --accept-source-agreements --scope machine --override "/silent" 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "      [OK] $($app.id) installed via Winget." -ForegroundColor Green
+                    $installed = $true
+                }
+                
+                if (-not $installed) {
+                    Write-Host "      [Direct Download] Downloading from vendor..." -ForegroundColor Gray
+                    try {
+                        if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+                            Start-BitsTransfer -Source $app.url -Destination $app.out -ErrorAction Stop
+                        } else {
+                            Invoke-WebRequest -Uri $app.url -OutFile $app.out -UseBasicParsing -ErrorAction Stop
+                        }
+                        
+                        if (Test-Path $app.out) {
+                            $proc = Start-Process -FilePath $app.out -ArgumentList $app.args -PassThru -ErrorAction Stop
+                            $proc.WaitForExit()
+                            Remove-Item $app.out -Force -ErrorAction SilentlyContinue
+                            Write-Host "      [OK] $($app.id) installed successfully." -ForegroundColor Green
+                        }
+                    } catch {
+                        Write-Host "      [WARN] Direct download failed for $($app.id): $_" -ForegroundColor Red
+                    }
+                }
+            }
+            Write-Host "[OK] Installation process completed." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "2" {
+            Write-Host "`nApplying Windows 11 Tweaks..." -ForegroundColor Yellow
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v AppsUseLightTheme /t REG_DWORD /d 0 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v SystemUsesLightTheme /t REG_DWORD /d 0 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v LaunchTo /t REG_DWORD /d 1 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Hidden /t REG_DWORD /d 1 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel" /v "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" /t REG_DWORD /d 0 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel" /v "{59031a47-3f72-44a7-89c5-5595fe6b30ee}" /t REG_DWORD /d 0 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 0 /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\DeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f >$null 2>&1
+            
+            reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSecondsInSystemClock /f >$null 2>&1
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSecondsInSystemClock /t REG_DWORD /d 0 /f >$null 2>&1
+            reg add "HKCU\Control Panel\International" /v sShortTime /t REG_SZ /d "HH:mm" /f >$null 2>&1
+            
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Process explorer
+            Write-Host "[OK] Tweaks applied." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "3" {
+            Write-Host "`nRunning DISM & SFC..." -ForegroundColor Yellow
+            dism /Online /Cleanup-Image /RestoreHealth
+            sfc /scannow
+            Write-Host "[OK] System repair completed." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "4" {
+            Write-Host "`nFixing Print Spooler..." -ForegroundColor Yellow
+            Stop-Service spooler -ErrorAction SilentlyContinue
+            Remove-Item "$env:windir\System32\spool\PRINTERS\*" -Recurse -Force -ErrorAction SilentlyContinue
+            Start-Service spooler -ErrorAction SilentlyContinue
+            Write-Host "[OK] Print queue cleared." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "5" {
+            Write-Host "`nResetting Network..." -ForegroundColor Yellow
+            ipconfig /flushdns
+            netsh winsock reset
+            netsh int ip reset
+            Write-Host "[OK] Network reset completed." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "6" {
+            Write-Host "`nBlocking Windows Update..." -ForegroundColor Yellow
+            sc config wuauserv start= disabled ; Stop-Service wuauserv -ErrorAction SilentlyContinue
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >$null 2>&1
+            Write-Host "[OK] Windows Update blocked." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "0" { 
+            exit 
+        }
+        default {
+            Write-Host "`n[ERROR] Invalid option." -ForegroundColor Red
+            Start-Sleep -Seconds 2
+        }
+    }
+}
