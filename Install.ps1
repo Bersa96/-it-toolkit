@@ -21,13 +21,14 @@ while ($true) {
     Write-Host "   [4] Repair Print Spooler Queue"
     Write-Host "   [5] Network Reset & Flush DNS"
     Write-Host "   [6] Block Windows Auto-Update"
-    Write-Host "   [7] Install Kaspersky Endpoint Security 14.0 (Silent)"
+    Write-Host "   [7] Enable Lansweeper Remote Management & Firewall Fix"
+    Write-Host "   [8] Install Kaspersky Endpoint Security 14.0 (Silent)"
     Write-Host ""
     Write-Host "   [0] Exit" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "Select option (0-7)"
+    $choice = Read-Host "Select option (0-8)"
 
     switch ($choice) {
         "1" {
@@ -132,6 +133,19 @@ while ($true) {
             Start-Sleep -Seconds 3
         }
         "7" {
+            Write-Host "`nEnabling Lansweeper Remote Management & Firewall Rules..." -ForegroundColor Yellow
+            netsh advfirewall firewall set rule group="remote administration" new enable=yes >$null 2>&1
+            netsh advfirewall firewall set rule group="windows management instrumentation (wmi)" new enable=yes >$null 2>&1
+            netsh advfirewall firewall set rule group="file and printer sharing" new enable=yes >$null 2>&1
+            Set-Service -Name RemoteRegistry -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name RemoteRegistry -ErrorAction SilentlyContinue
+            Set-Service -Name winmgmt -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name winmgmt -ErrorAction SilentlyContinue
+            Write-Host "      [OK] WMI, RPC, and Remote Administration firewall rules enabled." -ForegroundColor Green
+            Write-Host "      [OK] Remote Registry and WMI services started." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "8" {
             Write-Host "`nInstalling Kaspersky Endpoint Security 14.0..." -ForegroundColor Yellow
             $localInstaller = "D:\Sharing\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
             $uncInstaller   = "\\192.168.10.160\Sharing\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
