@@ -204,8 +204,8 @@ while ($true) {
                 Write-Host "      [OK] Hostname & Description set to: $cleanHostname" -ForegroundColor Green
             }
 
-            $localInstaller = "D:\Sharing\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-            $uncInstaller   = "\\192.168.10.160\Sharing\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
+            $localInstaller = "D:\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
+            $uncInstaller   = "\\192.168.10.160\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
             $kesArgs        = "/pEULA=1 /pPRIVACYPOLICY=1 /pKSN=1 /s"
 
             if (Test-Path $localInstaller) {
