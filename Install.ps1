@@ -141,8 +141,8 @@ while ($true) {
         "7" {
             Write-Host "`nFixing Lansweeper Access & Installing LsAgent..." -ForegroundColor Yellow
             
-            # 0. Single Prompt for Device Identity / Hostname (e.g. LOG-IRFAN or BUDI-PROD)
-            $inputIdentity = Read-Host "Enter Device Hostname (e.g. LOG-IRFAN) [Press Enter to skip]"
+            # 0. Single Prompt for Device Identity / Hostname (e.g. BERSA-DOK-HRGA)
+            $inputIdentity = Read-Host "Enter Device Hostname (e.g. BERSA-DOK-HRGA) [Press Enter to skip]"
 
             if ($inputIdentity) {
                 $cleanHostname = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
@@ -191,8 +191,8 @@ while ($true) {
         "8" {
             Write-Host "`nInstalling Kaspersky Endpoint Security 14.0..." -ForegroundColor Yellow
             
-            # 0. Single Prompt for Device Identity / Hostname (e.g. LOG-IRFAN or BUDI-PROD)
-            $inputIdentity = Read-Host "Enter Device Hostname (e.g. LOG-IRFAN) [Press Enter to skip]"
+            # 0. Single Prompt for Device Identity / Hostname (e.g. BERSA-DOK-HRGA)
+            $inputIdentity = Read-Host "Enter Device Hostname (e.g. BERSA-DOK-HRGA) [Press Enter to skip]"
 
             if ($inputIdentity) {
                 $cleanHostname = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
