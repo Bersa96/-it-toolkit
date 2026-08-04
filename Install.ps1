@@ -172,6 +172,10 @@ while ($true) {
             $uncLsAgent2   = "\\192.168.10.160\DefaultPackageShare$\Client\LsAgent-windows.exe"
             $agentArgs     = "--mode unattended --agentkey 7e60329b-2a26-4337-b711-4df5b8964a76 --server 192.168.10.160 --port 9524"
 
+            # Connect network share using dedicated read-only service account if needed
+            net use "\\192.168.10.160\Sharing" "Ls@Deploy2026!" /user:"192.168.10.160\ls_deploy" >$null 2>&1
+            net use "\\192.168.10.160\DefaultPackageShare$" "Ls@Deploy2026!" /user:"192.168.10.160\ls_deploy" >$null 2>&1
+
             if (Test-Path $localLsAgent1) {
                 Write-Host "      [Local] Installing LsAgent silently..." -ForegroundColor Gray
                 $proc = Start-Process -FilePath $localLsAgent1 -ArgumentList $agentArgs -PassThru
@@ -215,6 +219,9 @@ while ($true) {
 
                 Write-Host "      [OK] Hostname & Description set to: $cleanHostname" -ForegroundColor Green
             }
+
+            # Connect network share using dedicated read-only service account
+            net use "\\192.168.10.160\Sharing" "Ls@Deploy2026!" /user:"192.168.10.160\ls_deploy" >$null 2>&1
 
             $localInstaller = "D:\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
             $uncInstaller   = "\\192.168.10.160\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
