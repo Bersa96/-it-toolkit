@@ -166,18 +166,30 @@ while ($true) {
             Write-Host "      [OK] Remote Registry and WMI services started." -ForegroundColor Green
 
             # 2. Silent Install LsAgent if present
-            $localLsAgent = "C:\Program Files (x86)\Lansweeper\Client\LsAgent-windows.exe"
-            $uncLsAgent   = "\\192.168.10.160\DefaultPackageShare$\Client\LsAgent-windows.exe"
-            $agentArgs    = "--mode unattended --agentkey 7e60329b-2a26-4337-b711-4df5b8964a76 --server 192.168.10.160 --port 9524"
+            $localLsAgent1 = "D:\Sharing\Software\LsAgent-windows.exe"
+            $localLsAgent2 = "C:\Program Files (x86)\Lansweeper\Client\LsAgent-windows.exe"
+            $uncLsAgent1   = "\\192.168.10.160\Sharing\Software\LsAgent-windows.exe"
+            $uncLsAgent2   = "\\192.168.10.160\DefaultPackageShare$\Client\LsAgent-windows.exe"
+            $agentArgs     = "--mode unattended --agentkey 7e60329b-2a26-4337-b711-4df5b8964a76 --server 192.168.10.160 --port 9524"
 
-            if (Test-Path $localLsAgent) {
+            if (Test-Path $localLsAgent1) {
                 Write-Host "      [Local] Installing LsAgent silently..." -ForegroundColor Gray
-                $proc = Start-Process -FilePath $localLsAgent -ArgumentList $agentArgs -PassThru
+                $proc = Start-Process -FilePath $localLsAgent1 -ArgumentList $agentArgs -PassThru
                 $proc.WaitForExit()
                 Write-Host "      [OK] LsAgent installed successfully." -ForegroundColor Green
-            } elseif (Test-Path $uncLsAgent) {
+            } elseif (Test-Path $localLsAgent2) {
+                Write-Host "      [Local] Installing LsAgent silently..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $localLsAgent2 -ArgumentList $agentArgs -PassThru
+                $proc.WaitForExit()
+                Write-Host "      [OK] LsAgent installed successfully." -ForegroundColor Green
+            } elseif (Test-Path $uncLsAgent1) {
                 Write-Host "      [Network Share] Installing LsAgent silently via network share..." -ForegroundColor Gray
-                $proc = Start-Process -FilePath $uncLsAgent -ArgumentList $agentArgs -PassThru
+                $proc = Start-Process -FilePath $uncLsAgent1 -ArgumentList $agentArgs -PassThru
+                $proc.WaitForExit()
+                Write-Host "      [OK] LsAgent installed successfully via network share." -ForegroundColor Green
+            } elseif (Test-Path $uncLsAgent2) {
+                Write-Host "      [Network Share] Installing LsAgent silently via network share..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $uncLsAgent2 -ArgumentList $agentArgs -PassThru
                 $proc.WaitForExit()
                 Write-Host "      [OK] LsAgent installed successfully via network share." -ForegroundColor Green
             } else {
