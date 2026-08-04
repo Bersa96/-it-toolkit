@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Continue'
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -21,12 +21,13 @@ while ($true) {
     Write-Host "   [4] Repair Print Spooler Queue"
     Write-Host "   [5] Network Reset & Flush DNS"
     Write-Host "   [6] Block Windows Auto-Update"
+    Write-Host "   [7] Install Kaspersky Endpoint Security 14.0 (Silent)"
     Write-Host ""
     Write-Host "   [0] Exit" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "Select option (0-6)"
+    $choice = Read-Host "Select option (0-7)"
 
     switch ($choice) {
         "1" {
@@ -128,6 +129,27 @@ while ($true) {
             sc config wuauserv start= disabled ; Stop-Service wuauserv -ErrorAction SilentlyContinue
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >$null 2>&1
             Write-Host "[OK] Windows Update blocked." -ForegroundColor Green
+            Start-Sleep -Seconds 3
+        }
+        "7" {
+            Write-Host "`nInstalling Kaspersky Endpoint Security 14.0..." -ForegroundColor Yellow
+            $localInstaller = "D:\Sharing\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
+            $uncInstaller   = "\\192.168.10.160\Sharing\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
+            $kesArgs        = "/pEULA=1 /pPRIVACYPOLICY=1 /pKSN=1 /s"
+
+            if (Test-Path $localInstaller) {
+                Write-Host "      [Local] Found installer locally. Installing silently..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $localInstaller -ArgumentList $kesArgs -PassThru
+                $proc.WaitForExit()
+                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+            } elseif (Test-Path $uncInstaller) {
+                Write-Host "      [Network Share] Installing via network share..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $uncInstaller -ArgumentList $kesArgs -PassThru
+                $proc.WaitForExit()
+                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+            } else {
+                Write-Host "      [ERROR] Kaspersky installer not found at local or network share path." -ForegroundColor Red
+            }
             Start-Sleep -Seconds 3
         }
         "0" { 
