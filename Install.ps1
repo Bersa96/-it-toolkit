@@ -135,21 +135,17 @@ while ($true) {
         "7" {
             Write-Host "`nFixing Lansweeper Access & Installing LsAgent..." -ForegroundColor Yellow
             
-            # 0. Prompt for Device Identity (Hostname & Description)
-            $userName = Read-Host "Enter User Name (e.g. Irfan) [Press Enter to skip]"
-            $userDept = Read-Host "Enter Dept Code (e.g. LOG / HR / PROD) [Press Enter to skip]"
+            # 0. Single Prompt for Device Identity / Hostname (e.g. LOG-IRFAN or BUDI-PROD)
+            $inputIdentity = Read-Host "Enter Device Hostname (e.g. LOG-IRFAN) [Press Enter to skip]"
 
-            if ($userName -and $userDept) {
-                $cleanName = ($userName -replace '[^a-zA-Z0-9]', '').ToUpper()
-                $cleanDept = ($userDept -replace '[^a-zA-Z0-9]', '').ToUpper()
-                $newHostname = "$cleanDept-$cleanName"
-                if ($newHostname.Length -gt 15) { $newHostname = $newHostname.Substring(0, 15) }
+            if ($inputIdentity) {
+                $cleanHostname = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
+                if ($cleanHostname.Length -gt 15) { $cleanHostname = $cleanHostname.Substring(0, 15) }
 
-                Rename-Computer -NewName $newHostname -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value "$userName - $userDept" -ErrorAction SilentlyContinue
+                Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanHostname -ErrorAction SilentlyContinue
 
-                Write-Host "      [OK] Hostname renamed to: $newHostname (Takes effect after reboot for Kaspersky)" -ForegroundColor Green
-                Write-Host "      [OK] Description set to: $userName - $userDept (Lansweeper)" -ForegroundColor Green
+                Write-Host "      [OK] Hostname & Description set to: $cleanHostname" -ForegroundColor Green
             }
 
             # 1. Enable Firewall Rules & Services
@@ -187,21 +183,17 @@ while ($true) {
         "8" {
             Write-Host "`nInstalling Kaspersky Endpoint Security 14.0..." -ForegroundColor Yellow
             
-            # 0. Prompt for Device Identity if not set
-            $userName = Read-Host "Enter User Name (e.g. Irfan) [Press Enter to skip]"
-            $userDept = Read-Host "Enter Dept Code (e.g. LOG / HR / PROD) [Press Enter to skip]"
+            # 0. Single Prompt for Device Identity / Hostname (e.g. LOG-IRFAN or BUDI-PROD)
+            $inputIdentity = Read-Host "Enter Device Hostname (e.g. LOG-IRFAN) [Press Enter to skip]"
 
-            if ($userName -and $userDept) {
-                $cleanName = ($userName -replace '[^a-zA-Z0-9]', '').ToUpper()
-                $cleanDept = ($userDept -replace '[^a-zA-Z0-9]', '').ToUpper()
-                $newHostname = "$cleanDept-$cleanName"
-                if ($newHostname.Length -gt 15) { $newHostname = $newHostname.Substring(0, 15) }
+            if ($inputIdentity) {
+                $cleanHostname = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
+                if ($cleanHostname.Length -gt 15) { $cleanHostname = $cleanHostname.Substring(0, 15) }
 
-                Rename-Computer -NewName $newHostname -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value "$userName - $userDept" -ErrorAction SilentlyContinue
+                Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanHostname -ErrorAction SilentlyContinue
 
-                Write-Host "      [OK] Hostname renamed to: $newHostname (Takes effect after reboot for Kaspersky)" -ForegroundColor Green
-                Write-Host "      [OK] Description set to: $userName - $userDept (Lansweeper)" -ForegroundColor Green
+                Write-Host "      [OK] Hostname & Description set to: $cleanHostname" -ForegroundColor Green
             }
 
             $localInstaller = "D:\Sharing\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
