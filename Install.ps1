@@ -78,8 +78,9 @@ while ($true) {
                     }
                 }
             }
-            Write-Host "[OK] Installation process completed." -ForegroundColor Green
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] Installation process completed." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "2" {
             Write-Host "`nApplying Windows 11 Tweaks..." -ForegroundColor Yellow
@@ -99,38 +100,43 @@ while ($true) {
             
             Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
             Start-Process explorer
-            Write-Host "[OK] Tweaks applied." -ForegroundColor Green
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] Tweaks applied." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "3" {
             Write-Host "`nRunning DISM & SFC..." -ForegroundColor Yellow
             dism /Online /Cleanup-Image /RestoreHealth
             sfc /scannow
-            Write-Host "[OK] System repair completed." -ForegroundColor Green
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] System repair completed." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "4" {
             Write-Host "`nFixing Print Spooler..." -ForegroundColor Yellow
             Stop-Service spooler -ErrorAction SilentlyContinue
             Remove-Item "$env:windir\System32\spool\PRINTERS\*" -Recurse -Force -ErrorAction SilentlyContinue
             Start-Service spooler -ErrorAction SilentlyContinue
-            Write-Host "[OK] Print queue cleared." -ForegroundColor Green
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] Print queue cleared." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "5" {
             Write-Host "`nResetting Network..." -ForegroundColor Yellow
             ipconfig /flushdns
             netsh winsock reset
             netsh int ip reset
-            Write-Host "[OK] Network reset completed." -ForegroundColor Green
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] Network reset completed." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "6" {
             Write-Host "`nBlocking Windows Update..." -ForegroundColor Yellow
             sc config wuauserv start= disabled ; Stop-Service wuauserv -ErrorAction SilentlyContinue
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >$null 2>&1
-            Write-Host "[OK] Windows Update blocked." -ForegroundColor Green
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] Windows Update blocked." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "7" {
             Write-Host "`nFixing Lansweeper Access & Installing LsAgent..." -ForegroundColor Yellow
@@ -178,7 +184,9 @@ while ($true) {
                 Write-Host "      [INFO] LsAgent installer not found on network share; firewall/RPC rules configured." -ForegroundColor Yellow
             }
 
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] Lansweeper configuration completed successfully." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "8" {
             Write-Host "`nInstalling Kaspersky Endpoint Security 14.0..." -ForegroundColor Yellow
@@ -213,7 +221,9 @@ while ($true) {
             } else {
                 Write-Host "      [ERROR] Kaspersky installer not found at local or network share path." -ForegroundColor Red
             }
-            Start-Sleep -Seconds 3
+            Write-Host "`n[OK] Kaspersky task completed." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
         }
         "0" { 
             exit 
