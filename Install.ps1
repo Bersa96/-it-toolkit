@@ -21,7 +21,7 @@ while ($true) {
     Write-Host "   [4] Repair Print Spooler Queue"
     Write-Host "   [5] Network Reset & Flush DNS"
     Write-Host "   [6] Block Windows Auto-Update"
-    Write-Host "   [7] Enable Lansweeper Remote Management & Firewall Fix"
+    Write-Host "   [7] Fix Lansweeper Access (Enable Remote Mgmt, Firewall & Install LsAgent)"
     Write-Host "   [8] Install Kaspersky Endpoint Security 14.0 (Silent)"
     Write-Host ""
     Write-Host "   [0] Exit" -ForegroundColor Red
@@ -133,7 +133,9 @@ while ($true) {
             Start-Sleep -Seconds 3
         }
         "7" {
-            Write-Host "`nEnabling Lansweeper Remote Management & Firewall Rules..." -ForegroundColor Yellow
+            Write-Host "`nFixing Lansweeper Access & Installing LsAgent..." -ForegroundColor Yellow
+            
+            # 1. Enable Firewall Rules & Services
             netsh advfirewall firewall set rule group="remote administration" new enable=yes >$null 2>&1
             netsh advfirewall firewall set rule group="windows management instrumentation (wmi)" new enable=yes >$null 2>&1
             netsh advfirewall firewall set rule group="file and printer sharing" new enable=yes >$null 2>&1
@@ -143,6 +145,26 @@ while ($true) {
             Start-Service -Name winmgmt -ErrorAction SilentlyContinue
             Write-Host "      [OK] WMI, RPC, and Remote Administration firewall rules enabled." -ForegroundColor Green
             Write-Host "      [OK] Remote Registry and WMI services started." -ForegroundColor Green
+
+            # 2. Silent Install LsAgent if present
+            $localLsAgent = "C:\Program Files (x86)\Lansweeper\Client\LsAgent-windows.exe"
+            $uncLsAgent   = "\\192.168.10.160\DefaultPackageShare$\Client\LsAgent-windows.exe"
+            $agentArgs    = "--mode unattended --agentkey 7e60329b-2a26-4337-b711-4df5b8964a76 --server 192.168.10.160 --port 9524"
+
+            if (Test-Path $localLsAgent) {
+                Write-Host "      [Local] Installing LsAgent silently..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $localLsAgent -ArgumentList $agentArgs -PassThru
+                $proc.WaitForExit()
+                Write-Host "      [OK] LsAgent installed successfully." -ForegroundColor Green
+            } elseif (Test-Path $uncLsAgent) {
+                Write-Host "      [Network Share] Installing LsAgent silently via network share..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $uncLsAgent -ArgumentList $agentArgs -PassThru
+                $proc.WaitForExit()
+                Write-Host "      [OK] LsAgent installed successfully via network share." -ForegroundColor Green
+            } else {
+                Write-Host "      [INFO] LsAgent installer not found on network share; firewall/RPC rules configured." -ForegroundColor Yellow
+            }
+
             Start-Sleep -Seconds 3
         }
         "8" {
