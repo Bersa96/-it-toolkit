@@ -4,8 +4,8 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "[INFO] Requesting Administrator Privileges..." -ForegroundColor Yellow
-    $url = "https://raw.githubusercontent.com/Bersa96/-it-toolkit/main/Install.ps1"
-    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -NoExit -Command `"irm $url | iex`"" -Verb RunAs
+    $url = 'https://raw.githubusercontent.com/Bersa96/-it-toolkit/main/Install.ps1'
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -NoExit -Command `"Invoke-RestMethod '$url' | Invoke-Expression`"" -Verb RunAs
     exit
 }
 
