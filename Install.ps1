@@ -147,7 +147,13 @@ while ($true) {
             if ($inputIdentity) {
                 $cleanDescription = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
                 $cleanHostname = $cleanDescription
-                if ($cleanHostname.Length -gt 15) { $cleanHostname = $cleanHostname.Substring(0, 15) }
+                if ($cleanHostname.Length -gt 15) {
+                    if ($cleanDescription -match '^(.*?-DOK)') {
+                        $cleanHostname = $Matches[1]
+                    } else {
+                        $cleanHostname = $cleanHostname.Substring(0, 15)
+                    }
+                }
 
                 Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
                 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanDescription -ErrorAction SilentlyContinue
@@ -227,7 +233,13 @@ while ($true) {
             if ($inputIdentity) {
                 $cleanDescription = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
                 $cleanHostname = $cleanDescription
-                if ($cleanHostname.Length -gt 15) { $cleanHostname = $cleanHostname.Substring(0, 15) }
+                if ($cleanHostname.Length -gt 15) {
+                    if ($cleanDescription -match '^(.*?-DOK)') {
+                        $cleanHostname = $Matches[1]
+                    } else {
+                        $cleanHostname = $cleanHostname.Substring(0, 15)
+                    }
+                }
 
                 Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
                 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanDescription -ErrorAction SilentlyContinue
