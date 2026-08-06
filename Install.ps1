@@ -154,7 +154,19 @@ while ($true) {
                 Write-Host "      [OK] Hostname & Description set to: $cleanHostname" -ForegroundColor Green
             }
 
-            # 1. Enable Firewall Rules & Services
+            # 1. Create or update local admin account for remote deployment
+            $deployUser = "AsetDP"
+            $deployPass = ConvertTo-SecureString "@AsetDP25" -AsPlainText -Force
+            if (-not (Get-LocalUser -Name $deployUser -ErrorAction SilentlyContinue)) {
+                New-LocalUser -Name $deployUser -Password $deployPass -PasswordNeverExpires -AccountNeverExpires -ErrorAction SilentlyContinue | Out-Null
+                Add-LocalGroupMember -Group "Administrators" -Member $deployUser -ErrorAction SilentlyContinue
+                Write-Host "      [OK] Local admin account '$deployUser' created for remote management." -ForegroundColor Green
+            } else {
+                Set-LocalUser -Name $deployUser -Password $deployPass -PasswordNeverExpires $true -ErrorAction SilentlyContinue
+                Write-Host "      [OK] Local admin account '$deployUser' already exists. Password updated." -ForegroundColor Green
+            }
+
+            # 2. Enable Firewall Rules & Services
             netsh advfirewall firewall set rule group="remote administration" new enable=yes >$null 2>&1
             netsh advfirewall firewall set rule group="windows management instrumentation (wmi)" new enable=yes >$null 2>&1
             netsh advfirewall firewall set rule group="file and printer sharing" new enable=yes >$null 2>&1
