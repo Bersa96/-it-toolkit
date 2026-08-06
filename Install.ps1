@@ -141,17 +141,18 @@ while ($true) {
         "7" {
             Write-Host "`nFixing Lansweeper Access & Installing LsAgent..." -ForegroundColor Yellow
             
-            # 0. Single Prompt for Device Identity / Hostname (e.g. BERSA-DOK-HRGA)
+            # 0. Single Prompt for Device Identity / Hostname (e.g. BERSA-DOK-HRGA or RIADTHON-DOK-REPAIRMAINTENANCE)
             $inputIdentity = Read-Host "Enter Device Hostname (e.g. BERSA-DOK-HRGA) [Press Enter to skip]"
 
             if ($inputIdentity) {
-                $cleanHostname = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
-                if ($cleanHostname.Length -gt 30) { $cleanHostname = $cleanHostname.Substring(0, 30) }
+                $cleanDescription = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
+                $cleanHostname = $cleanDescription
+                if ($cleanHostname.Length -gt 15) { $cleanHostname = $cleanHostname.Substring(0, 15) }
 
                 Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanHostname -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanDescription -ErrorAction SilentlyContinue
 
-                Write-Host "      [OK] Hostname & Description set to: $cleanHostname" -ForegroundColor Green
+                Write-Host "      [OK] Hostname set to: $cleanHostname (Description: $cleanDescription)" -ForegroundColor Green
             }
 
             # 1. Create or update local admin account for remote deployment
@@ -166,7 +167,8 @@ while ($true) {
                 Write-Host "      [OK] Local admin account '$deployUser' already exists. Password updated." -ForegroundColor Green
             }
 
-            # 2. Enable Firewall Rules & Services
+            # 2. Enable Firewall Rules, Services & Remote UAC (LocalAccountTokenFilterPolicy)
+            reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f >$null 2>&1
             netsh advfirewall firewall set rule group="remote administration" new enable=yes >$null 2>&1
             netsh advfirewall firewall set rule group="windows management instrumentation (wmi)" new enable=yes >$null 2>&1
             netsh advfirewall firewall set rule group="file and printer sharing" new enable=yes >$null 2>&1
@@ -174,7 +176,7 @@ while ($true) {
             Start-Service -Name RemoteRegistry -ErrorAction SilentlyContinue
             Set-Service -Name winmgmt -StartupType Automatic -ErrorAction SilentlyContinue
             Start-Service -Name winmgmt -ErrorAction SilentlyContinue
-            Write-Host "      [OK] WMI, RPC, and Remote Administration firewall rules enabled." -ForegroundColor Green
+            Write-Host "      [OK] WMI, RPC, Remote UAC, and Remote Administration enabled." -ForegroundColor Green
             Write-Host "      [OK] Remote Registry and WMI services started." -ForegroundColor Green
 
             # 2. Silent Install LsAgent if present
@@ -219,17 +221,18 @@ while ($true) {
         "8" {
             Write-Host "`nInstalling Kaspersky Endpoint Security 14.0..." -ForegroundColor Yellow
             
-            # 0. Single Prompt for Device Identity / Hostname (e.g. BERSA-DOK-HRGA)
+            # 0. Single Prompt for Device Identity / Hostname (e.g. BERSA-DOK-HRGA or RIADTHON-DOK-REPAIRMAINTENANCE)
             $inputIdentity = Read-Host "Enter Device Hostname (e.g. BERSA-DOK-HRGA) [Press Enter to skip]"
 
             if ($inputIdentity) {
-                $cleanHostname = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
-                if ($cleanHostname.Length -gt 30) { $cleanHostname = $cleanHostname.Substring(0, 30) }
+                $cleanDescription = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
+                $cleanHostname = $cleanDescription
+                if ($cleanHostname.Length -gt 15) { $cleanHostname = $cleanHostname.Substring(0, 15) }
 
                 Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanHostname -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanDescription -ErrorAction SilentlyContinue
 
-                Write-Host "      [OK] Hostname & Description set to: $cleanHostname" -ForegroundColor Green
+                Write-Host "      [OK] Hostname set to: $cleanHostname (Description: $cleanDescription)" -ForegroundColor Green
             }
 
             # Connect network share using dedicated read-only service account
