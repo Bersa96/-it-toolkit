@@ -272,12 +272,31 @@ while ($true) {
             $sourceChoice = Read-Host "Select source (1-4) [Default: 1]"
             if (-not $sourceChoice) { $sourceChoice = "1" }
 
+            # 0. Clean leftover 360 Total Security / Incompatible Antivirus remnants & WMI registration
+            Write-Host "      [Cleaning] Checking for leftover 360 Antivirus remnants & WMI entries..." -ForegroundColor Gray
+            Get-Service | Where-Object { $_.Name -like '*360*' -or $_.DisplayName -like '*360*' -or $_.Name -like '*Qihu*' -or $_.Name -like '*ZhuDong*' } | ForEach-Object {
+                Stop-Service -Name $_.Name -Force -ErrorAction SilentlyContinue
+                sc.exe delete $_.Name >$null 2>&1
+            }
+            try {
+                Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName "AntivirusProduct" -ErrorAction SilentlyContinue | Where-Object { $_.displayName -like "*360*" -or $_.displayName -like "*Qihu*" } | Remove-CimInstance -ErrorAction SilentlyContinue
+            } catch {}
+            $old360Regs = @(
+                "HKLM:\SOFTWARE\360Safe",
+                "HKLM:\SOFTWARE\WOW6432Node\360Safe",
+                "HKLM:\SOFTWARE\Qihoo",
+                "HKLM:\SOFTWARE\WOW6432Node\Qihoo"
+            )
+            foreach ($rPath in $old360Regs) {
+                if (Test-Path $rPath) { Remove-Item -Path $rPath -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+
             # Connect network share using dedicated read-only service account
             net use "\\192.168.10.160\Sharing" "Ls@Deploy2026!" /user:"192.168.10.160\ls_deploy" >$null 2>&1
 
             $localInstaller = "D:\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
             $uncInstaller   = "\\192.168.10.160\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-            $kesArgs        = "/pEULA=1 /pPRIVACYPOLICY=1 /pKSN=1"
+            $kesArgs        = "/pEULA=1 /pPRIVACYPOLICY=1 /pKSN=1 /pSKIPCOMPATINC=1"
 
             # Check connected Flash Drives (USB)
             $fdInstaller = $null
