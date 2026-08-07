@@ -259,13 +259,38 @@ while ($true) {
                 $proc = Start-Process -FilePath $localInstaller -ArgumentList $kesArgs -Wait -PassThru
                 Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
             } elseif (Test-Path $uncInstaller) {
-                Write-Host "      [Network Share] Copying installer to local temp before execution..." -ForegroundColor Gray
+                Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
                 $tempInstaller = "$env:TEMP\KES14_Setup.exe"
-                Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force
-                Write-Host "      [Network Share] Executing silent installation..." -ForegroundColor Gray
-                $proc = Start-Process -FilePath $tempInstaller -ArgumentList $kesArgs -Wait -PassThru
-                Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
-                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                
+                $copySuccess = $false
+                try {
+                    if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+                        Start-BitsTransfer -Source $uncInstaller -Destination $tempInstaller -ErrorAction Stop
+                        $copySuccess = $true
+                    }
+                } catch {
+                    $copySuccess = $false
+                }
+
+                if (-not $copySuccess) {
+                    try {
+                        Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
+                        $copySuccess = $true
+                    } catch {
+                        Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red
+                    }
+                }
+
+                if ($copySuccess -and (Test-Path $tempInstaller)) {
+                    Write-Host "      [Network Share] Executing silent installation..." -ForegroundColor Gray
+                    $proc = Start-Process -FilePath $tempInstaller -ArgumentList $kesArgs -Wait -PassThru
+                    Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
+                    Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                } else {
+                    Write-Host "      [ERROR] Failed to copy installer from network share. Retrying directly from share..." -ForegroundColor Red
+                    Start-Process -FilePath $uncInstaller -ArgumentList $kesArgs -Wait -PassThru
+                    Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
+                }
             } else {
                 Write-Host "      [ERROR] Kaspersky installer not found at local or network share path." -ForegroundColor Red
             }
