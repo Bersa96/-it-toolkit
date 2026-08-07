@@ -269,7 +269,7 @@ while ($true) {
 
             $localInstaller = "D:\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
             $uncInstaller   = "\\192.168.10.160\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-            $kesArgs        = "/pEULA=1 /pPRIVACYPOLICY=1 /pKSN=1 /s"
+            $kesArgs        = "/pEULA=1 /pPRIVACYPOLICY=1 /pKSN=1"
 
             # Check connected Flash Drives (USB)
             $fdInstaller = $null
@@ -284,13 +284,13 @@ while ($true) {
             }
 
             if ($fdInstaller) {
-                Write-Host "      [Flash Drive] Found installer on USB ($fdInstaller). Installing silently..." -ForegroundColor Gray
+                Write-Host "      [Flash Drive] Found installer on USB ($fdInstaller). Launching setup..." -ForegroundColor Gray
                 $proc = Start-Process -FilePath $fdInstaller -ArgumentList $kesArgs -Wait -PassThru
-                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully from USB." -ForegroundColor Green
+                Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
             } elseif (Test-Path $localInstaller) {
-                Write-Host "      [Local] Found installer locally. Installing silently..." -ForegroundColor Gray
+                Write-Host "      [Local] Found installer locally. Launching setup..." -ForegroundColor Gray
                 $proc = Start-Process -FilePath $localInstaller -ArgumentList $kesArgs -Wait -PassThru
-                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
             } elseif (Test-Path $uncInstaller) {
                 Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
                 $tempInstaller = "$env:TEMP\KES14_Setup.exe"
@@ -315,12 +315,12 @@ while ($true) {
                 }
 
                 if ($copySuccess -and (Test-Path $tempInstaller)) {
-                    Write-Host "      [Network Share] Executing silent installation..." -ForegroundColor Gray
+                    Write-Host "      [Network Share] Launching setup wizard..." -ForegroundColor Gray
                     $proc = Start-Process -FilePath $tempInstaller -ArgumentList $kesArgs -Wait -PassThru
                     Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
-                    Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                    Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
                 } else {
-                    Write-Host "      [ERROR] Failed to copy installer from network share. Retrying directly from share..." -ForegroundColor Red
+                    Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly from share..." -ForegroundColor Red
                     Start-Process -FilePath $uncInstaller -ArgumentList $kesArgs -Wait -PassThru
                     Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
                 }
