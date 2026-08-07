@@ -264,6 +264,14 @@ while ($true) {
                 Write-Host "      [OK] Hostname set to: $cleanHostname (Description: $cleanDescription)" -ForegroundColor Green
             }
 
+            Write-Host "`nSelect Installer Source:" -ForegroundColor Cyan
+            Write-Host "   [1] Auto-Detect (Flash Drive -> Local Disk -> Network Share)"
+            Write-Host "   [2] Flash Drive (USB)"
+            Write-Host "   [3] Local Disk (D:\Sharing\Software)"
+            Write-Host "   [4] Network Share (\\192.168.10.160\Sharing\Software)"
+            $sourceChoice = Read-Host "Select source (1-4) [Default: 1]"
+            if (-not $sourceChoice) { $sourceChoice = "1" }
+
             # Connect network share using dedicated read-only service account
             net use "\\192.168.10.160\Sharing" "Ls@Deploy2026!" /user:"192.168.10.160\ls_deploy" >$null 2>&1
 
@@ -283,49 +291,102 @@ while ($true) {
                 if (Test-Path $c3) { $fdInstaller = $c3; break }
             }
 
-            if ($fdInstaller) {
-                Write-Host "      [Flash Drive] Found installer on USB ($fdInstaller). Launching setup..." -ForegroundColor Gray
-                $proc = Start-Process -FilePath $fdInstaller -ArgumentList $kesArgs -Wait -PassThru
-                Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
-            } elseif (Test-Path $localInstaller) {
-                Write-Host "      [Local] Found installer locally. Launching setup..." -ForegroundColor Gray
-                $proc = Start-Process -FilePath $localInstaller -ArgumentList $kesArgs -Wait -PassThru
-                Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
-            } elseif (Test-Path $uncInstaller) {
-                Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
-                $tempInstaller = "$env:TEMP\KES14_Setup.exe"
-                
-                $copySuccess = $false
-                try {
-                    if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
-                        Start-BitsTransfer -Source $uncInstaller -Destination $tempInstaller -ErrorAction Stop
-                        $copySuccess = $true
-                    }
-                } catch {
-                    $copySuccess = $false
-                }
-
-                if (-not $copySuccess) {
-                    try {
-                        Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
-                        $copySuccess = $true
-                    } catch {
-                        Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red
+            switch ($sourceChoice) {
+                "2" {
+                    if ($fdInstaller) {
+                        Write-Host "      [Flash Drive] Found installer on USB ($fdInstaller). Launching setup..." -ForegroundColor Gray
+                        $proc = Start-Process -FilePath $fdInstaller -ArgumentList $kesArgs -Wait -PassThru
+                        Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
+                    } else {
+                        Write-Host "      [ERROR] Installer not found on any connected Flash Drive (USB)." -ForegroundColor Red
                     }
                 }
-
-                if ($copySuccess -and (Test-Path $tempInstaller)) {
-                    Write-Host "      [Network Share] Launching setup wizard..." -ForegroundColor Gray
-                    $proc = Start-Process -FilePath $tempInstaller -ArgumentList $kesArgs -Wait -PassThru
-                    Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
-                    Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
-                } else {
-                    Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly from share..." -ForegroundColor Red
-                    Start-Process -FilePath $uncInstaller -ArgumentList $kesArgs -Wait -PassThru
-                    Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
+                "3" {
+                    if (Test-Path $localInstaller) {
+                        Write-Host "      [Local] Found installer locally. Launching setup..." -ForegroundColor Gray
+                        $proc = Start-Process -FilePath $localInstaller -ArgumentList $kesArgs -Wait -PassThru
+                        Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
+                    } else {
+                        Write-Host "      [ERROR] Local installer not found at $localInstaller." -ForegroundColor Red
+                    }
                 }
-            } else {
-                Write-Host "      [ERROR] Kaspersky installer not found at local or network share path." -ForegroundColor Red
+                "4" {
+                    if (Test-Path $uncInstaller) {
+                        Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
+                        $tempInstaller = "$env:TEMP\KES14_Setup.exe"
+                        
+                        $copySuccess = $false
+                        try {
+                            if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+                                Start-BitsTransfer -Source $uncInstaller -Destination $tempInstaller -ErrorAction Stop
+                                $copySuccess = $true
+                            }
+                        } catch { $copySuccess = $false }
+
+                        if (-not $copySuccess) {
+                            try {
+                                Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
+                                $copySuccess = $true
+                            } catch { Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red }
+                        }
+
+                        if ($copySuccess -and (Test-Path $tempInstaller)) {
+                            Write-Host "      [Network Share] Launching setup wizard..." -ForegroundColor Gray
+                            $proc = Start-Process -FilePath $tempInstaller -ArgumentList $kesArgs -Wait -PassThru
+                            Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
+                            Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
+                        } else {
+                            Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly from share..." -ForegroundColor Red
+                            Start-Process -FilePath $uncInstaller -ArgumentList $kesArgs -Wait -PassThru
+                            Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
+                        }
+                    } else {
+                        Write-Host "      [ERROR] Network share installer not found at $uncInstaller." -ForegroundColor Red
+                    }
+                }
+                default {
+                    # Auto-Detect mode
+                    if ($fdInstaller) {
+                        Write-Host "      [Flash Drive] Found installer on USB ($fdInstaller). Launching setup..." -ForegroundColor Gray
+                        $proc = Start-Process -FilePath $fdInstaller -ArgumentList $kesArgs -Wait -PassThru
+                        Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
+                    } elseif (Test-Path $localInstaller) {
+                        Write-Host "      [Local] Found installer locally. Launching setup..." -ForegroundColor Gray
+                        $proc = Start-Process -FilePath $localInstaller -ArgumentList $kesArgs -Wait -PassThru
+                        Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
+                    } elseif (Test-Path $uncInstaller) {
+                        Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
+                        $tempInstaller = "$env:TEMP\KES14_Setup.exe"
+                        
+                        $copySuccess = $false
+                        try {
+                            if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+                                Start-BitsTransfer -Source $uncInstaller -Destination $tempInstaller -ErrorAction Stop
+                                $copySuccess = $true
+                            }
+                        } catch { $copySuccess = $false }
+
+                        if (-not $copySuccess) {
+                            try {
+                                Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
+                                $copySuccess = $true
+                            } catch { Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red }
+                        }
+
+                        if ($copySuccess -and (Test-Path $tempInstaller)) {
+                            Write-Host "      [Network Share] Launching setup wizard..." -ForegroundColor Gray
+                            $proc = Start-Process -FilePath $tempInstaller -ArgumentList $kesArgs -Wait -PassThru
+                            Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
+                            Write-Host "      [OK] Kaspersky Endpoint Security setup completed." -ForegroundColor Green
+                        } else {
+                            Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly from share..." -ForegroundColor Red
+                            Start-Process -FilePath $uncInstaller -ArgumentList $kesArgs -Wait -PassThru
+                            Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
+                        }
+                    } else {
+                        Write-Host "      [ERROR] Kaspersky installer not found at local, USB, or network share path." -ForegroundColor Red
+                    }
+                }
             }
             Write-Host "`n[OK] Kaspersky task completed." -ForegroundColor Green
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
