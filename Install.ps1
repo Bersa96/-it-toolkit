@@ -192,11 +192,28 @@ while ($true) {
             $uncLsAgent2   = "\\192.168.10.160\DefaultPackageShare$\Client\LsAgent-windows.exe"
             $agentArgs     = "--mode unattended --agentkey 7e60329b-2a26-4337-b711-4df5b8964a76 --server 192.168.10.160 --port 9524"
 
+            # Check connected Flash Drives (USB)
+            $fdLsAgent = $null
+            $removableDrives = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter
+            foreach ($drive in $removableDrives) {
+                $candidate1 = "$($drive):\Software\LsAgent-windows.exe"
+                $candidate2 = "$($drive):\soft\LsAgent-windows.exe"
+                $candidate3 = "$($drive):\LsAgent-windows.exe"
+                if (Test-Path $candidate1) { $fdLsAgent = $candidate1; break }
+                if (Test-Path $candidate2) { $fdLsAgent = $candidate2; break }
+                if (Test-Path $candidate3) { $fdLsAgent = $candidate3; break }
+            }
+
             # Connect network share using dedicated read-only service account if needed
             net use "\\192.168.10.160\Sharing" "Ls@Deploy2026!" /user:"192.168.10.160\ls_deploy" >$null 2>&1
             net use "\\192.168.10.160\DefaultPackageShare$" "Ls@Deploy2026!" /user:"192.168.10.160\ls_deploy" >$null 2>&1
 
-            if (Test-Path $localLsAgent1) {
+            if ($fdLsAgent) {
+                Write-Host "      [Flash Drive] Found installer on USB ($fdLsAgent). Installing silently..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $fdLsAgent -ArgumentList $agentArgs -PassThru
+                $proc.WaitForExit()
+                Write-Host "      [OK] LsAgent installed successfully from USB." -ForegroundColor Green
+            } elseif (Test-Path $localLsAgent1) {
                 Write-Host "      [Local] Installing LsAgent silently..." -ForegroundColor Gray
                 $proc = Start-Process -FilePath $localLsAgent1 -ArgumentList $agentArgs -PassThru
                 $proc.WaitForExit()
@@ -217,7 +234,7 @@ while ($true) {
                 $proc.WaitForExit()
                 Write-Host "      [OK] LsAgent installed successfully via network share." -ForegroundColor Green
             } else {
-                Write-Host "      [INFO] LsAgent installer not found on network share; firewall/RPC rules configured." -ForegroundColor Yellow
+                Write-Host "      [INFO] LsAgent installer not found on USB or network share; firewall/RPC rules configured." -ForegroundColor Yellow
             }
 
             Write-Host "`n[OK] Lansweeper configuration completed successfully." -ForegroundColor Green
@@ -254,7 +271,23 @@ while ($true) {
             $uncInstaller   = "\\192.168.10.160\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
             $kesArgs        = "/pEULA=1 /pPRIVACYPOLICY=1 /pKSN=1 /s"
 
-            if (Test-Path $localInstaller) {
+            # Check connected Flash Drives (USB)
+            $fdInstaller = $null
+            $removableDrives = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter
+            foreach ($drive in $removableDrives) {
+                $c1 = "$($drive):\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
+                $c2 = "$($drive):\soft\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
+                $c3 = "$($drive):\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
+                if (Test-Path $c1) { $fdInstaller = $c1; break }
+                if (Test-Path $c2) { $fdInstaller = $c2; break }
+                if (Test-Path $c3) { $fdInstaller = $c3; break }
+            }
+
+            if ($fdInstaller) {
+                Write-Host "      [Flash Drive] Found installer on USB ($fdInstaller). Installing silently..." -ForegroundColor Gray
+                $proc = Start-Process -FilePath $fdInstaller -ArgumentList $kesArgs -Wait -PassThru
+                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully from USB." -ForegroundColor Green
+            } elseif (Test-Path $localInstaller) {
                 Write-Host "      [Local] Found installer locally. Installing silently..." -ForegroundColor Gray
                 $proc = Start-Process -FilePath $localInstaller -ArgumentList $kesArgs -Wait -PassThru
                 Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
