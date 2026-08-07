@@ -272,22 +272,36 @@ while ($true) {
             $sourceChoice = Read-Host "Select source (1-4) [Default: 1]"
             if (-not $sourceChoice) { $sourceChoice = "1" }
 
-            # 0. Clean leftover 360 Total Security / Incompatible Antivirus remnants & WMI registration
-            Write-Host "      [Cleaning] Checking for leftover 360 Antivirus remnants & WMI entries..." -ForegroundColor Gray
-            Get-Service | Where-Object { $_.Name -like '*360*' -or $_.DisplayName -like '*360*' -or $_.Name -like '*Qihu*' -or $_.Name -like '*ZhuDong*' } | ForEach-Object {
+            # 0. Deep Clean Incompatible Antivirus Remnants (360, AVG, Avast, Smadav, McAfee, Norton) from WMI & Registry
+            Write-Host "      [Cleaning] Purging leftover third-party Antivirus remnants (AVG, Avast, 360, Smadav, McAfee)..." -ForegroundColor Gray
+            
+            # Stop and remove leftover services
+            $avPatterns = '*360*', '*Qihu*', '*ZhuDong*', '*AVG*', '*Avast*', '*Smadav*', '*McAfee*', '*Norton*', '*Symantec*'
+            Get-Service | Where-Object { 
+                $name = $_.Name; $disp = $_.DisplayName
+                ($avPatterns | Where-Object { $name -like $_ -or $disp -like $_ })
+            } | ForEach-Object {
                 Stop-Service -Name $_.Name -Force -ErrorAction SilentlyContinue
                 sc.exe delete $_.Name >$null 2>&1
             }
+
+            # Unregister non-Microsoft & non-Kaspersky products from Windows Security Center WMI
             try {
-                Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName "AntivirusProduct" -ErrorAction SilentlyContinue | Where-Object { $_.displayName -like "*360*" -or $_.displayName -like "*Qihu*" } | Remove-CimInstance -ErrorAction SilentlyContinue
+                Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName "AntivirusProduct" -ErrorAction SilentlyContinue | 
+                Where-Object { $_.displayName -notlike "*Defender*" -and $_.displayName -notlike "*Kaspersky*" } | 
+                Remove-CimInstance -ErrorAction SilentlyContinue
             } catch {}
-            $old360Regs = @(
-                "HKLM:\SOFTWARE\360Safe",
-                "HKLM:\SOFTWARE\WOW6432Node\360Safe",
-                "HKLM:\SOFTWARE\Qihoo",
-                "HKLM:\SOFTWARE\WOW6432Node\Qihoo"
+
+            # Remove leftover legacy registry keys
+            $oldAvRegs = @(
+                "HKLM:\SOFTWARE\360Safe", "HKLM:\SOFTWARE\WOW6432Node\360Safe",
+                "HKLM:\SOFTWARE\Qihoo", "HKLM:\SOFTWARE\WOW6432Node\Qihoo",
+                "HKLM:\SOFTWARE\AVG", "HKLM:\SOFTWARE\WOW6432Node\AVG",
+                "HKLM:\SOFTWARE\Avast Software", "HKLM:\SOFTWARE\WOW6432Node\Avast Software",
+                "HKLM:\SOFTWARE\Smadav", "HKLM:\SOFTWARE\WOW6432Node\Smadav",
+                "HKLM:\SOFTWARE\McAfee", "HKLM:\SOFTWARE\WOW6432Node\McAfee"
             )
-            foreach ($rPath in $old360Regs) {
+            foreach ($rPath in $oldAvRegs) {
                 if (Test-Path $rPath) { Remove-Item -Path $rPath -Recurse -Force -ErrorAction SilentlyContinue }
             }
 
