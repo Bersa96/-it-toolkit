@@ -131,10 +131,21 @@ while ($true) {
             Read-Host | Out-Null
         }
         "6" {
-            Write-Host "`nBlocking Windows Update..." -ForegroundColor Yellow
-            sc config wuauserv start= disabled ; Stop-Service wuauserv -ErrorAction SilentlyContinue
+            Write-Host "`nBlocking Windows Auto-Update..." -ForegroundColor Yellow
+            
+            $updateServices = @("wuauserv", "UsoSvc", "dosvc")
+            foreach ($svcName in $updateServices) {
+                if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+                    Set-Service -Name $svcName -StartupType Disabled -ErrorAction SilentlyContinue
+                    Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+                    Write-Host "      [OK] Service '$svcName' disabled and stopped." -ForegroundColor Green
+                }
+            }
+
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >$null 2>&1
-            Write-Host "`n[OK] Windows Update blocked." -ForegroundColor Green
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /t REG_DWORD /d 2 /f >$null 2>&1
+            
+            Write-Host "`n[OK] Windows Update policies applied successfully." -ForegroundColor Green
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
         }
