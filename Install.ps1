@@ -20,7 +20,7 @@ while ($true) {
     Write-Host "   [3] Repair System Corruption (SFC & DISM RestoreHealth)"
     Write-Host "   [4] Repair Print Spooler Queue"
     Write-Host "   [5] Network Reset & Flush DNS"
-    Write-Host "   [6] Block Windows Auto-Update"
+    Write-Host "   [6] Manage Windows Auto-Update (Enable / Disable)"
     Write-Host "   [7] Fix Lansweeper Access (Enable Remote Mgmt, Firewall & Install LsAgent)"
     Write-Host "   [8] Install Kaspersky Endpoint Security 14.0 (Silent)"
     Write-Host ""
@@ -131,21 +131,42 @@ while ($true) {
             Read-Host | Out-Null
         }
         "6" {
-            Write-Host "`nBlocking Windows Auto-Update..." -ForegroundColor Yellow
-            
-            $updateServices = @("wuauserv", "UsoSvc", "dosvc")
-            foreach ($svcName in $updateServices) {
-                if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
-                    Set-Service -Name $svcName -StartupType Disabled -ErrorAction SilentlyContinue
-                    Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-                    Write-Host "      [OK] Service '$svcName' disabled and stopped." -ForegroundColor Green
+            Write-Host "`n=== Manage Windows Auto-Update ===" -ForegroundColor Yellow
+            Write-Host "   [1] Disable / Block Windows Auto-Update" -ForegroundColor Red
+            Write-Host "   [2] Enable / Restore Windows Auto-Update" -ForegroundColor Green
+            Write-Host ""
+            $updateChoice = Read-Host "Select option (1-2)"
+
+            if ($updateChoice -eq "1") {
+                Write-Host "`nDisabling Windows Auto-Update..." -ForegroundColor Yellow
+                $updateServices = @("wuauserv", "UsoSvc", "dosvc")
+                foreach ($svcName in $updateServices) {
+                    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+                        Set-Service -Name $svcName -StartupType Disabled -ErrorAction SilentlyContinue
+                        Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+                        Write-Host "      [OK] Service '$svcName' disabled and stopped." -ForegroundColor Green
+                    }
                 }
+                reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >$null 2>&1
+                reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /t REG_DWORD /d 2 /f >$null 2>&1
+                Write-Host "`n[OK] Windows Auto-Update disabled successfully." -ForegroundColor Green
+            } elseif ($updateChoice -eq "2") {
+                Write-Host "`nEnabling Windows Auto-Update..." -ForegroundColor Yellow
+                $updateServices = @("wuauserv", "UsoSvc", "dosvc")
+                foreach ($svcName in $updateServices) {
+                    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+                        Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
+                        Start-Service -Name $svcName -ErrorAction SilentlyContinue
+                        Write-Host "      [OK] Service '$svcName' enabled and started." -ForegroundColor Green
+                    }
+                }
+                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /f >$null 2>&1
+                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /f >$null 2>&1
+                Write-Host "`n[OK] Windows Auto-Update enabled successfully." -ForegroundColor Green
+            } else {
+                Write-Host "`n[WARN] Invalid choice. No changes were made." -ForegroundColor Yellow
             }
 
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >$null 2>&1
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /t REG_DWORD /d 2 /f >$null 2>&1
-            
-            Write-Host "`n[OK] Windows Update policies applied successfully." -ForegroundColor Green
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
         }
