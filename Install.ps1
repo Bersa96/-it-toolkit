@@ -153,7 +153,7 @@ while ($true) {
                     }
                 }
 
-                # 3. Set 9999-day pause expiry dates in Windows Update UX Settings
+                # 3. Set 9999-day pause expiry dates in Windows Update UX Settings & Policy keys
                 $now = Get-Date
                 $futureDate = $now.AddDays(9999)
                 $pauseStart = $now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -169,6 +169,14 @@ while ($true) {
                 Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesStartTime" -Value $pauseStart -Force
                 Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesExpiryTime" -Value $pauseEnd -Force
 
+                $polPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+                if (-not (Test-Path $polPath)) { New-Item -Path $polPath -Force | Out-Null }
+
+                Set-ItemProperty -Path $polPath -Name "PauseFeatureUpdatesStartTime" -Value $pauseStart -Force
+                Set-ItemProperty -Path $polPath -Name "PauseFeatureUpdatesEndTime" -Value $pauseEnd -Force
+                Set-ItemProperty -Path $polPath -Name "PauseQualityUpdatesStartTime" -Value $pauseStart -Force
+                Set-ItemProperty -Path $polPath -Name "PauseQualityUpdatesEndTime" -Value $pauseEnd -Force
+
                 Write-Host "      [OK] Services enabled & GPO blocks cleared." -ForegroundColor Gray
                 Write-Host "      [OK] Pause expiry time set to: $pauseEnd" -ForegroundColor Gray
                 Write-Host "`n[OK] Windows Auto-Update paused for 9999 days (until $($futureDate.ToString('yyyy-MM-dd')))." -ForegroundColor Green
@@ -180,6 +188,12 @@ while ($true) {
                 $pauseKeys = @("PauseUpdatesStartTime", "PauseUpdatesExpiryTime", "PauseFeatureUpdatesStartTime", "PauseFeatureUpdatesExpiryTime", "PauseQualityUpdatesStartTime", "PauseQualityUpdatesExpiryTime")
                 foreach ($k in $pauseKeys) {
                     Remove-ItemProperty -Path $uxPath -Name $k -ErrorAction SilentlyContinue
+                }
+
+                $polPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+                $polKeys = @("PauseFeatureUpdatesStartTime", "PauseFeatureUpdatesEndTime", "PauseQualityUpdatesStartTime", "PauseQualityUpdatesEndTime")
+                foreach ($k in $polKeys) {
+                    Remove-ItemProperty -Path $polPath -Name $k -ErrorAction SilentlyContinue
                 }
 
                 # 2. Clean up GPO blocks
