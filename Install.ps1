@@ -132,37 +132,42 @@ while ($true) {
         }
         "6" {
             Write-Host "`n=== Manage Windows Auto-Update ===" -ForegroundColor Yellow
-            Write-Host "   [1] Disable / Block Windows Auto-Update" -ForegroundColor Red
-            Write-Host "   [2] Enable / Restore Windows Auto-Update" -ForegroundColor Green
+            Write-Host "   [1] Pause Windows Auto-Update for 20 Years (Until 2046)" -ForegroundColor Red
+            Write-Host "   [2] Resume / Restore Windows Auto-Update" -ForegroundColor Green
             Write-Host ""
             $updateChoice = Read-Host "Select option (1-2)"
 
             if ($updateChoice -eq "1") {
-                Write-Host "`nDisabling Windows Auto-Update..." -ForegroundColor Yellow
-                $updateServices = @("wuauserv", "UsoSvc", "dosvc")
-                foreach ($svcName in $updateServices) {
-                    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
-                        Set-Service -Name $svcName -StartupType Disabled -ErrorAction SilentlyContinue
-                        Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-                        Write-Host "      [OK] Service '$svcName' disabled and stopped." -ForegroundColor Green
-                    }
-                }
-                reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >$null 2>&1
-                reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /t REG_DWORD /d 2 /f >$null 2>&1
-                Write-Host "`n[OK] Windows Auto-Update disabled successfully." -ForegroundColor Green
+                Write-Host "`nPausing Windows Auto-Update until 2046 (20 Years)..." -ForegroundColor Yellow
+                
+                $now = Get-Date
+                $futureDate = $now.AddYears(20)
+                $pauseStart = $now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                $pauseEnd = $futureDate.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+                $uxPath = "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings"
+                if (-not (Test-Path $uxPath)) { New-Item -Path $uxPath -Force | Out-Null }
+
+                Set-ItemProperty -Path $uxPath -Name "PauseUpdatesStartTime" -Value $pauseStart -Force
+                Set-ItemProperty -Path $uxPath -Name "PauseUpdatesExpiryTime" -Value $pauseEnd -Force
+                Set-ItemProperty -Path $uxPath -Name "PauseFeatureUpdatesStartTime" -Value $pauseStart -Force
+                Set-ItemProperty -Path $uxPath -Name "PauseFeatureUpdatesExpiryTime" -Value $pauseEnd -Force
+                Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesStartTime" -Value $pauseStart -Force
+                Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesExpiryTime" -Value $pauseEnd -Force
+
+                Write-Host "      [OK] Pause start time : $pauseStart" -ForegroundColor Gray
+                Write-Host "      [OK] Pause expiry time: $pauseEnd" -ForegroundColor Gray
+                Write-Host "`n[OK] Windows Auto-Update paused for 20 years (until $($futureDate.ToString('yyyy-MM-dd')))." -ForegroundColor Green
             } elseif ($updateChoice -eq "2") {
-                Write-Host "`nEnabling Windows Auto-Update..." -ForegroundColor Yellow
-                $updateServices = @("wuauserv", "UsoSvc", "dosvc")
-                foreach ($svcName in $updateServices) {
-                    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
-                        Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
-                        Start-Service -Name $svcName -ErrorAction SilentlyContinue
-                        Write-Host "      [OK] Service '$svcName' enabled and started." -ForegroundColor Green
-                    }
+                Write-Host "`nResuming Windows Auto-Update..." -ForegroundColor Yellow
+                
+                $uxPath = "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings"
+                $pauseKeys = @("PauseUpdatesStartTime", "PauseUpdatesExpiryTime", "PauseFeatureUpdatesStartTime", "PauseFeatureUpdatesExpiryTime", "PauseQualityUpdatesStartTime", "PauseQualityUpdatesExpiryTime")
+                foreach ($k in $pauseKeys) {
+                    Remove-ItemProperty -Path $uxPath -Name $k -ErrorAction SilentlyContinue
                 }
-                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /f >$null 2>&1
-                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /f >$null 2>&1
-                Write-Host "`n[OK] Windows Auto-Update enabled successfully." -ForegroundColor Green
+
+                Write-Host "`n[OK] Windows Auto-Update resumed successfully." -ForegroundColor Green
             } else {
                 Write-Host "`n[WARN] Invalid choice. No changes were made." -ForegroundColor Yellow
             }
