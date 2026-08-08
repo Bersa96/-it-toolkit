@@ -352,11 +352,16 @@ while ($true) {
             $sourceChoice = Read-Host "Select source (1-4) [Default: 1]"
             if (-not $sourceChoice) { $sourceChoice = "1" }
 
-            # 0. Deep Clean Incompatible Antivirus Remnants (360, AVG, Avast, Smadav, McAfee, Norton) from WMI & Registry
-            Write-Host "      [Cleaning] Purging leftover third-party Antivirus remnants (AVG, Avast, 360, Smadav, McAfee)..." -ForegroundColor Gray
+            # 0. Deep Clean Incompatible Antivirus Remnants from WMI, Services & Registry
+            Write-Host "      [Cleaning] Purging leftover third-party Antivirus remnants (360, AVG, Avast, Smadav, McAfee, Norton, Bitdefender, ESET, Malwarebytes, Avira, Sophos, TrendMicro, Webroot)..." -ForegroundColor Gray
             
             # Stop and remove leftover services
-            $avPatterns = '*360*', '*Qihu*', '*ZhuDong*', '*AVG*', '*Avast*', '*Smadav*', '*McAfee*', '*Norton*', '*Symantec*'
+            $avPatterns = @(
+                '*360*', '*Qihu*', '*ZhuDong*', '*AVG*', '*Avast*', '*Smadav*', '*McAfee*', '*Norton*', '*Symantec*',
+                '*Bitdefender*', '*ESET*', '*ekrn*', '*Malwarebytes*', '*MBAM*', '*Avira*', '*Sophos*', '*TrendMicro*',
+                '*Webroot*', '*WRSA*', '*Panda*', '*Baidu*', '*PCMatic*', '*BullGuard*', '*F-Secure*', '*Cylance*',
+                '*SentinelOne*', '*TotalAV*', '*K7AntiVirus*'
+            )
             Get-Service | Where-Object { 
                 $name = $_.Name; $disp = $_.DisplayName
                 ($avPatterns | Where-Object { $name -like $_ -or $disp -like $_ })
@@ -379,7 +384,23 @@ while ($true) {
                 "HKLM:\SOFTWARE\AVG", "HKLM:\SOFTWARE\WOW6432Node\AVG",
                 "HKLM:\SOFTWARE\Avast Software", "HKLM:\SOFTWARE\WOW6432Node\Avast Software",
                 "HKLM:\SOFTWARE\Smadav", "HKLM:\SOFTWARE\WOW6432Node\Smadav",
-                "HKLM:\SOFTWARE\McAfee", "HKLM:\SOFTWARE\WOW6432Node\McAfee"
+                "HKLM:\SOFTWARE\McAfee", "HKLM:\SOFTWARE\WOW6432Node\McAfee",
+                "HKLM:\SOFTWARE\Norton", "HKLM:\SOFTWARE\WOW6432Node\Norton",
+                "HKLM:\SOFTWARE\Symantec", "HKLM:\SOFTWARE\WOW6432Node\Symantec",
+                "HKLM:\SOFTWARE\Bitdefender", "HKLM:\SOFTWARE\WOW6432Node\Bitdefender",
+                "HKLM:\SOFTWARE\ESET", "HKLM:\SOFTWARE\WOW6432Node\ESET",
+                "HKLM:\SOFTWARE\Malwarebytes", "HKLM:\SOFTWARE\WOW6432Node\Malwarebytes",
+                "HKLM:\SOFTWARE\Avira", "HKLM:\SOFTWARE\WOW6432Node\Avira",
+                "HKLM:\SOFTWARE\Sophos", "HKLM:\SOFTWARE\WOW6432Node\Sophos",
+                "HKLM:\SOFTWARE\TrendMicro", "HKLM:\SOFTWARE\WOW6432Node\TrendMicro",
+                "HKLM:\SOFTWARE\WRSA", "HKLM:\SOFTWARE\WOW6432Node\WRSA",
+                "HKLM:\SOFTWARE\Panda Software", "HKLM:\SOFTWARE\WOW6432Node\Panda Software",
+                "HKLM:\SOFTWARE\BaiduSecurity", "HKLM:\SOFTWARE\WOW6432Node\BaiduSecurity",
+                "HKLM:\SOFTWARE\BullGuard", "HKLM:\SOFTWARE\WOW6432Node\BullGuard",
+                "HKLM:\SOFTWARE\F-Secure", "HKLM:\SOFTWARE\WOW6432Node\F-Secure",
+                "HKLM:\SOFTWARE\Cylance", "HKLM:\SOFTWARE\WOW6432Node\Cylance",
+                "HKLM:\SOFTWARE\SentinelOne", "HKLM:\SOFTWARE\WOW6432Node\SentinelOne",
+                "HKLM:\SOFTWARE\TotalAV", "HKLM:\SOFTWARE\WOW6432Node\TotalAV"
             )
             foreach ($rPath in $oldAvRegs) {
                 if (Test-Path $rPath) { Remove-Item -Path $rPath -Recurse -Force -ErrorAction SilentlyContinue }
