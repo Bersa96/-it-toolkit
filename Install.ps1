@@ -22,7 +22,7 @@ while ($true) {
     Write-Host "   [5] Network Reset & Flush DNS"
     Write-Host "   [6] Manage Windows Auto-Update (Pause 9999 Days / Resume)"
     Write-Host "   [7] Fix Lansweeper Access (Enable Remote Mgmt, Firewall & Install LsAgent)"
-    Write-Host "   [8] Install Kaspersky Endpoint Security 14.0 (Silent)"
+    Write-Host "   [8] Install Kaspersky Endpoint Security 14.0"
     Write-Host ""
     Write-Host "   [0] Exit" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
