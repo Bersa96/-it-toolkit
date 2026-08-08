@@ -20,7 +20,7 @@ while ($true) {
     Write-Host "   [3] Repair System Corruption (SFC & DISM RestoreHealth)"
     Write-Host "   [4] Repair Print Spooler Queue"
     Write-Host "   [5] Network Reset & Flush DNS"
-    Write-Host "   [6] Manage Windows Auto-Update (Enable / Disable)"
+    Write-Host "   [6] Manage Windows Auto-Update (Pause 9999 Days / Resume)"
     Write-Host "   [7] Fix Lansweeper Access (Enable Remote Mgmt, Firewall & Install LsAgent)"
     Write-Host "   [8] Install Kaspersky Endpoint Security 14.0 (Silent)"
     Write-Host ""
