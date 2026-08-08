@@ -132,13 +132,13 @@ while ($true) {
         }
         "6" {
             Write-Host "`n=== Manage Windows Auto-Update ===" -ForegroundColor Yellow
-            Write-Host "   [1] Pause Windows Auto-Update for 20 Years (Until 2046)" -ForegroundColor Red
+            Write-Host "   [1] Pause Windows Auto-Update for 9999 Days (~27 Years)" -ForegroundColor Red
             Write-Host "   [2] Resume / Restore Windows Auto-Update" -ForegroundColor Green
             Write-Host ""
             $updateChoice = Read-Host "Select option (1-2)"
 
             if ($updateChoice -eq "1") {
-                Write-Host "`nPausing Windows Auto-Update until 2046 (20 Years)..." -ForegroundColor Yellow
+                Write-Host "`nPausing Windows Auto-Update for 9999 Days (~27 Years)..." -ForegroundColor Yellow
                 
                 # 1. Clean up old GPO registry blocks that cause "Something went wrong" UI errors
                 reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /f >$null 2>&1
@@ -153,9 +153,9 @@ while ($true) {
                     }
                 }
 
-                # 3. Set 20-year pause expiry dates in Windows Update UX Settings
+                # 3. Set 9999-day pause expiry dates in Windows Update UX Settings
                 $now = Get-Date
-                $futureDate = $now.AddYears(20)
+                $futureDate = $now.AddDays(9999)
                 $pauseStart = $now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
                 $pauseEnd = $futureDate.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
@@ -171,7 +171,7 @@ while ($true) {
 
                 Write-Host "      [OK] Services enabled & GPO blocks cleared." -ForegroundColor Gray
                 Write-Host "      [OK] Pause expiry time set to: $pauseEnd" -ForegroundColor Gray
-                Write-Host "`n[OK] Windows Auto-Update paused for 20 years (until $($futureDate.ToString('yyyy-MM-dd')))." -ForegroundColor Green
+                Write-Host "`n[OK] Windows Auto-Update paused for 9999 days (until $($futureDate.ToString('yyyy-MM-dd')))." -ForegroundColor Green
             } elseif ($updateChoice -eq "2") {
                 Write-Host "`nResuming Windows Auto-Update..." -ForegroundColor Yellow
                 
