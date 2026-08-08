@@ -140,6 +140,20 @@ while ($true) {
             if ($updateChoice -eq "1") {
                 Write-Host "`nPausing Windows Auto-Update until 2046 (20 Years)..." -ForegroundColor Yellow
                 
+                # 1. Clean up old GPO registry blocks that cause "Something went wrong" UI errors
+                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /f >$null 2>&1
+                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /f >$null 2>&1
+
+                # 2. Ensure services are running so Windows Update Settings page opens cleanly
+                $updateServices = @("wuauserv", "UsoSvc", "dosvc")
+                foreach ($svcName in $updateServices) {
+                    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+                        Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
+                        Start-Service -Name $svcName -ErrorAction SilentlyContinue
+                    }
+                }
+
+                # 3. Set 20-year pause expiry dates in Windows Update UX Settings
                 $now = Get-Date
                 $futureDate = $now.AddYears(20)
                 $pauseStart = $now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -155,16 +169,30 @@ while ($true) {
                 Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesStartTime" -Value $pauseStart -Force
                 Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesExpiryTime" -Value $pauseEnd -Force
 
-                Write-Host "      [OK] Pause start time : $pauseStart" -ForegroundColor Gray
-                Write-Host "      [OK] Pause expiry time: $pauseEnd" -ForegroundColor Gray
+                Write-Host "      [OK] Services enabled & GPO blocks cleared." -ForegroundColor Gray
+                Write-Host "      [OK] Pause expiry time set to: $pauseEnd" -ForegroundColor Gray
                 Write-Host "`n[OK] Windows Auto-Update paused for 20 years (until $($futureDate.ToString('yyyy-MM-dd')))." -ForegroundColor Green
             } elseif ($updateChoice -eq "2") {
                 Write-Host "`nResuming Windows Auto-Update..." -ForegroundColor Yellow
                 
+                # 1. Remove pause timestamps
                 $uxPath = "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings"
                 $pauseKeys = @("PauseUpdatesStartTime", "PauseUpdatesExpiryTime", "PauseFeatureUpdatesStartTime", "PauseFeatureUpdatesExpiryTime", "PauseQualityUpdatesStartTime", "PauseQualityUpdatesExpiryTime")
                 foreach ($k in $pauseKeys) {
                     Remove-ItemProperty -Path $uxPath -Name $k -ErrorAction SilentlyContinue
+                }
+
+                # 2. Clean up GPO blocks
+                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /f >$null 2>&1
+                reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /f >$null 2>&1
+
+                # 3. Ensure services are running
+                $updateServices = @("wuauserv", "UsoSvc", "dosvc")
+                foreach ($svcName in $updateServices) {
+                    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+                        Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
+                        Start-Service -Name $svcName -ErrorAction SilentlyContinue
+                    }
                 }
 
                 Write-Host "`n[OK] Windows Auto-Update resumed successfully." -ForegroundColor Green
