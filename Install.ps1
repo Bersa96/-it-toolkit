@@ -399,20 +399,26 @@ while ($true) {
                 $c1 = "$($drive):\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
                 $c2 = "$($drive):\soft\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
                 $c3 = "$($drive):\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-                if (Test-Path $c1) { $fdInstaller = $c1; break }
+                    if (Test-Path $c1) { $fdInstaller = $c1; break }
                 if (Test-Path $c2) { $fdInstaller = $c2; break }
                 if (Test-Path $c3) { $fdInstaller = $c3; break }
             }
 
+            $tempInstaller = "$env:SystemDrive\Temp\KES14_Setup.exe"
+            if (-not (Test-Path "$env:SystemDrive\Temp")) { New-Item -Path "$env:SystemDrive\Temp" -ItemType Directory -Force | Out-Null }
+
+            $targetInstallerToRun = $null
+
             switch ($sourceChoice) {
                 "2" {
                     if ($fdInstaller) {
-                        Write-Host "      [Flash Drive] Launching Kaspersky installer ($fdInstaller)..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $fdInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                        Write-Host "      [Flash Drive] Copying installer from USB to Local Disk ($tempInstaller)..." -ForegroundColor Gray
+                        Copy-Item -Path $fdInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk. You can now safely EJECT your Flash Drive (USB)!" -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                            $targetInstallerToRun = $fdInstaller
                         }
                     } else {
                         Write-Host "      [ERROR] Installer not found on any connected Flash Drive (USB)." -ForegroundColor Red
@@ -420,12 +426,12 @@ while ($true) {
                 }
                 "3" {
                     if (Test-Path $localInstaller) {
-                        Write-Host "      [Local] Launching Kaspersky installer..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $localInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                        if ($localInstaller -ne $tempInstaller) {
+                            Write-Host "      [Local Disk] Copying installer to Local Temp ($tempInstaller)..." -ForegroundColor Gray
+                            Copy-Item -Path $localInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                            if (Test-Path $tempInstaller) { $targetInstallerToRun = $tempInstaller } else { $targetInstallerToRun = $localInstaller }
                         } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                            $targetInstallerToRun = $localInstaller
                         }
                     } else {
                         Write-Host "      [ERROR] Local installer not found at $localInstaller." -ForegroundColor Red
@@ -433,9 +439,7 @@ while ($true) {
                 }
                 "4" {
                     if (Test-Path $uncInstaller) {
-                        Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
-                        $tempInstaller = "$env:TEMP\KES14_Setup.exe"
-                        
+                        Write-Host "      [Network Share] Copying installer from Network Share to Local Disk ($tempInstaller)..." -ForegroundColor Gray
                         $copySuccess = $false
                         try {
                             if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
@@ -451,23 +455,11 @@ while ($true) {
                             } catch { Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red }
                         }
 
-                        if ($copySuccess -and (Test-Path $tempInstaller)) {
-                            Write-Host "      [Network Share] Launching Kaspersky installer..." -ForegroundColor Gray
-                            $proc = Start-Process -FilePath $tempInstaller -Wait -PassThru
-                            Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk successfully." -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly..." -ForegroundColor Red
-                            $proc = Start-Process -FilePath $uncInstaller -Wait -PassThru
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                            $targetInstallerToRun = $uncInstaller
                         }
                     } else {
                         Write-Host "      [ERROR] Network share installer not found at $uncInstaller." -ForegroundColor Red
@@ -476,25 +468,20 @@ while ($true) {
                 default {
                     # Auto-Detect mode
                     if ($fdInstaller) {
-                        Write-Host "      [Flash Drive] Launching Kaspersky installer ($fdInstaller)..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $fdInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                        Write-Host "      [Auto-Detect: USB] Copying installer from USB to Local Disk ($tempInstaller)..." -ForegroundColor Gray
+                        Copy-Item -Path $fdInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk. You can now safely EJECT your Flash Drive (USB)!" -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                            $targetInstallerToRun = $fdInstaller
                         }
                     } elseif (Test-Path $localInstaller) {
-                        Write-Host "      [Local] Launching Kaspersky installer..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $localInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
-                        } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                        }
+                        Write-Host "      [Auto-Detect: Local] Copying installer to Local Temp ($tempInstaller)..." -ForegroundColor Gray
+                        Copy-Item -Path $localInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                        if (Test-Path $tempInstaller) { $targetInstallerToRun = $tempInstaller } else { $targetInstallerToRun = $localInstaller }
                     } elseif (Test-Path $uncInstaller) {
-                        Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
-                        $tempInstaller = "$env:TEMP\KES14_Setup.exe"
-                        
+                        Write-Host "      [Auto-Detect: Network Share] Copying installer to Local Disk ($tempInstaller)..." -ForegroundColor Gray
                         $copySuccess = $false
                         try {
                             if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
@@ -507,32 +494,36 @@ while ($true) {
                             try {
                                 Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
                                 $copySuccess = $true
-                            } catch { Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red }
+                            } catch {}
                         }
 
-                        if ($copySuccess -and (Test-Path $tempInstaller)) {
-                            Write-Host "      [Network Share] Launching Kaspersky installer..." -ForegroundColor Gray
-                            $proc = Start-Process -FilePath $tempInstaller -Wait -PassThru
-                            Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk successfully." -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly..." -ForegroundColor Red
-                            $proc = Start-Process -FilePath $uncInstaller -Wait -PassThru
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                            $targetInstallerToRun = $uncInstaller
                         }
-                    } else {
-                        Write-Host "      [ERROR] Kaspersky installer not found at local, USB, or network share path." -ForegroundColor Red
                     }
                 }
             }
+
+            if ($targetInstallerToRun -and (Test-Path $targetInstallerToRun)) {
+                Write-Host "      [Executing] Launching Kaspersky installer from Local Disk ($targetInstallerToRun)..." -ForegroundColor Yellow
+                $proc = Start-Process -FilePath $targetInstallerToRun -Wait -PassThru
+                if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                    Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                } else {
+                    Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                }
+                
+                # Cleanup local temp installer after execution finishes
+                if ($targetInstallerToRun -eq $tempInstaller) {
+                    Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
+                }
+            } else {
+                Write-Host "      [ERROR] Unable to locate or prepare Kaspersky installer." -ForegroundColor Red
+            }
+
             Write-Host "`n[OK] Kaspersky task completed." -ForegroundColor Green
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
