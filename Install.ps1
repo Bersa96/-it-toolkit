@@ -178,8 +178,9 @@ while ($true) {
                 Set-ItemProperty -Path $polPath -Name "PauseQualityUpdatesEndTime" -Value $pauseEnd -Force
 
                 Write-Host "      [OK] Services enabled & GPO blocks cleared." -ForegroundColor Gray
-                Write-Host "      [OK] Pause expiry time set to: $pauseEnd" -ForegroundColor Gray
-                Write-Host "`n[OK] Windows Auto-Update paused for 9999 days (until $($futureDate.ToString('yyyy-MM-dd')))." -ForegroundColor Green
+                Write-Host "      [OK] Pause start time : $($now.ToString('dd MMMM yyyy'))" -ForegroundColor Gray
+                Write-Host "      [OK] Pause expiry date: $($futureDate.ToString('dd MMMM yyyy')) (Calculated 9999 days dynamically)" -ForegroundColor Gray
+                Write-Host "`n[OK] Windows Auto-Update paused dynamically for 9999 days (until $($futureDate.ToString('dd MMMM yyyy')))." -ForegroundColor Green
             } elseif ($updateChoice -eq "2") {
                 Write-Host "`nResuming Windows Auto-Update..." -ForegroundColor Yellow
                 
