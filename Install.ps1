@@ -15,20 +15,21 @@ while ($true) {
     Write-Host "                    IT SUPPORT TOOLKIT - MAIN MENU                       " -ForegroundColor Cyan
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "   [1] Install Standard Apps (WhatsApp, Chrome, Acrobat, 7-Zip, AnyDesk, Zoom)"
-    Write-Host "   [2] Apply Windows 11 Tweaks (Dark Mode, File Explorer, End Task & Privacy)"
-    Write-Host "   [3] Repair System Corruption (SFC & DISM RestoreHealth)"
-    Write-Host "   [4] Repair Print Spooler Queue"
-    Write-Host "   [5] Network Reset & Flush DNS"
-    Write-Host "   [6] Manage Windows Auto-Update (Enable / Disable)"
-    Write-Host "   [7] Fix Lansweeper Access (Enable Remote Mgmt, Firewall & Install LsAgent)"
-    Write-Host "   [8] Install Kaspersky Endpoint Security 14.0 (Silent)"
+    Write-Host "   [1] Install Standard Apps         (Chrome, Acrobat, WhatsApp, 7-Zip, AnyDesk, Zoom)"
+    Write-Host "   [2] Windows Tweaks & Optimizations (Dark Mode, Classic Explorer, Privacy)"
+    Write-Host "   [3] Repair System Corruption       (SFC Scannow & DISM RestoreHealth)"
+    Write-Host "   [4] Repair Print Spooler           (Clear & Restart Stuck Print Queue)"
+    Write-Host "   [5] Reset Network & Optimize Wi-Fi (Flush DNS, TCP Tuning, Low Latency)"
+    Write-Host "   [6] Manage Windows Auto-Update     (Pause 9999 Days / Resume)"
+    Write-Host "   [7] Setup Lansweeper Agent         (Set Hostname, Firewall & LsAgent)"
+    Write-Host "   [8] Install Kaspersky Antivirus    (Clean Old AV & Safe USB Eject)"
+    Write-Host "   [9] Block AutoCAD 2019 Telemetry   (Block Genuine Service & License Popups)"
     Write-Host ""
     Write-Host "   [0] Exit" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "Select option (0-8)"
+    $choice = Read-Host "Select option (0-9)"
 
     switch ($choice) {
         "1" {
@@ -122,11 +123,63 @@ while ($true) {
             Read-Host | Out-Null
         }
         "5" {
-            Write-Host "`nResetting Network..." -ForegroundColor Yellow
-            ipconfig /flushdns
-            netsh winsock reset
-            netsh int ip reset
-            Write-Host "`n[OK] Network reset completed." -ForegroundColor Green
+            Write-Host "`n=== Comprehensive Network Reset & Wi-Fi/TCP Performance Optimizer ===" -ForegroundColor Yellow
+            
+            # 1. Flush DNS & ARP Table
+            Write-Host "      [1/6] Flushing DNS Cache & Clearing ARP Tables..." -ForegroundColor Gray
+            Clear-DnsClientCache -ErrorAction SilentlyContinue
+            ipconfig /flushdns >$null 2>&1
+            arp -d * >$null 2>&1
+
+            # 2. Reset Winsock & TCP/IP Stack
+            Write-Host "      [2/6] Resetting Winsock & TCP/IP Stack..." -ForegroundColor Gray
+            netsh winsock reset >$null 2>&1
+            netsh int ip reset >$null 2>&1
+            netsh int tcp reset >$null 2>&1
+
+            # 3. Optimize Windows TCP Stack (CUBIC Congestion, ECN, Window Auto-Tuning)
+            Write-Host "      [3/6] Optimizing TCP Window Scaling & Congestion Provider (CUBIC)..." -ForegroundColor Gray
+            Set-NetTCPSetting -SettingName Internet -AutoTuningLevelLocal Normal -ScalingHeuristics Disabled -EcnCapability Enabled -CongestionProvider CUBIC -ErrorAction SilentlyContinue
+            Set-NetTCPSetting -SettingName InternetCustom -AutoTuningLevelLocal Normal -ScalingHeuristics Disabled -EcnCapability Enabled -CongestionProvider CUBIC -ErrorAction SilentlyContinue
+
+            # 4. Universal Wi-Fi Adapter Tuning (Intel, Realtek, MediaTek, Qualcomm, Broadcom)
+            Write-Host "      [4/6] Optimizing Wi-Fi settings across all vendor chipsets (Intel, Realtek, MediaTek, Qualcomm)..." -ForegroundColor Gray
+            Get-NetAdapter -Name "Wi-Fi*", "Wireless*", "WLAN*" -ErrorAction SilentlyContinue | ForEach-Object {
+                $adapterName = $_.Name
+                $advProps = Get-NetAdapterAdvancedProperty -Name $adapterName -ErrorAction SilentlyContinue
+                
+                # A. Roaming Aggressiveness (Lowest / 1 / Disable)
+                $roamProp = $advProps | Where-Object { $_.DisplayName -like "*Roaming*" -or $_.RegistryKeyword -in @("RegRoamLevel", "RoamAggressiveness", "RoamingAggressiveness") }
+                if ($roamProp) {
+                    $roamVal = $roamProp.ValidDisplayValues | Where-Object { $_ -like "1.*" -or $_ -like "*Lowest*" -or $_ -like "*Disabled*" -or $_ -eq "1" } | Select-Object -First 1
+                    if ($roamVal) { Set-NetAdapterAdvancedProperty -Name $adapterName -DisplayName $roamProp.DisplayName -DisplayValue $roamVal -ErrorAction SilentlyContinue }
+                }
+
+                # B. Preferred Band (5GHz / 5G first)
+                $bandProp = $advProps | Where-Object { $_.DisplayName -like "*Preferred Band*" -or $_.DisplayName -like "*Band Preference*" -or $_.RegistryKeyword -in @("PreferBand", "PreferredBand") }
+                if ($bandProp) {
+                    $bandVal = $bandProp.ValidDisplayValues | Where-Object { $_ -like "*5G*" -or $_ -like "*5 GHz*" -or $_ -like "3.*" -or $_ -like "*Prefer 5*" } | Select-Object -First 1
+                    if ($bandVal) { Set-NetAdapterAdvancedProperty -Name $adapterName -DisplayName $bandProp.DisplayName -DisplayValue $bandVal -ErrorAction SilentlyContinue }
+                }
+
+                # C. Disable Power Saving / Sleep on Disconnect
+                $powerProps = $advProps | Where-Object { $_.DisplayName -like "*Power Save*" -or $_.DisplayName -like "*Energy Efficient*" -or $_.RegistryKeyword -in @("MIMO_PS", "PowerSavingMode", "DeviceSleepOnDisconnect") }
+                foreach ($p in $powerProps) {
+                    $offVal = $p.ValidDisplayValues | Where-Object { $_ -like "*Disabled*" -or $_ -like "*Off*" -or $_ -eq "0" } | Select-Object -First 1
+                    if ($offVal) { Set-NetAdapterAdvancedProperty -Name $adapterName -DisplayName $p.DisplayName -DisplayValue $offVal -ErrorAction SilentlyContinue }
+                }
+            }
+
+            # 5. Reset Windows Firewall Network Profiles
+            Write-Host "      [5/6] Ensuring Network Discovery & ICMP Echo are active..." -ForegroundColor Gray
+            netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=Yes >$null 2>&1
+            netsh advfirewall firewall set rule group="Network Discovery" new enable=Yes >$null 2>&1
+
+            # 6. Release & Renew DHCP
+            Write-Host "      [6/6] Refreshing DHCP IP Leases..." -ForegroundColor Gray
+            ipconfig /renew >$null 2>&1
+
+            Write-Host "`n[OK] Network Reset & Wi-Fi Performance Optimization completed successfully!" -ForegroundColor Green
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
         }
@@ -153,7 +206,7 @@ while ($true) {
                     }
                 }
 
-                # 3. Set 9999-day pause expiry dates in Windows Update UX Settings
+                # 3. Set 9999-day pause expiry dates in Windows Update UX Settings & Policy keys
                 $now = Get-Date
                 $futureDate = $now.AddDays(9999)
                 $pauseStart = $now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -169,9 +222,18 @@ while ($true) {
                 Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesStartTime" -Value $pauseStart -Force
                 Set-ItemProperty -Path $uxPath -Name "PauseQualityUpdatesExpiryTime" -Value $pauseEnd -Force
 
+                $polPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+                if (-not (Test-Path $polPath)) { New-Item -Path $polPath -Force | Out-Null }
+
+                Set-ItemProperty -Path $polPath -Name "PauseFeatureUpdatesStartTime" -Value $pauseStart -Force
+                Set-ItemProperty -Path $polPath -Name "PauseFeatureUpdatesEndTime" -Value $pauseEnd -Force
+                Set-ItemProperty -Path $polPath -Name "PauseQualityUpdatesStartTime" -Value $pauseStart -Force
+                Set-ItemProperty -Path $polPath -Name "PauseQualityUpdatesEndTime" -Value $pauseEnd -Force
+
                 Write-Host "      [OK] Services enabled & GPO blocks cleared." -ForegroundColor Gray
-                Write-Host "      [OK] Pause expiry time set to: $pauseEnd" -ForegroundColor Gray
-                Write-Host "`n[OK] Windows Auto-Update paused for 9999 days (until $($futureDate.ToString('yyyy-MM-dd')))." -ForegroundColor Green
+                Write-Host "      [OK] Pause start time : $($now.ToString('dd MMMM yyyy'))" -ForegroundColor Gray
+                Write-Host "      [OK] Pause expiry date: $($futureDate.ToString('dd MMMM yyyy')) (Calculated 9999 days dynamically)" -ForegroundColor Gray
+                Write-Host "`n[OK] Windows Auto-Update paused dynamically for 9999 days (until $($futureDate.ToString('dd MMMM yyyy')))." -ForegroundColor Green
             } elseif ($updateChoice -eq "2") {
                 Write-Host "`nResuming Windows Auto-Update..." -ForegroundColor Yellow
                 
@@ -180,6 +242,12 @@ while ($true) {
                 $pauseKeys = @("PauseUpdatesStartTime", "PauseUpdatesExpiryTime", "PauseFeatureUpdatesStartTime", "PauseFeatureUpdatesExpiryTime", "PauseQualityUpdatesStartTime", "PauseQualityUpdatesExpiryTime")
                 foreach ($k in $pauseKeys) {
                     Remove-ItemProperty -Path $uxPath -Name $k -ErrorAction SilentlyContinue
+                }
+
+                $polPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+                $polKeys = @("PauseFeatureUpdatesStartTime", "PauseFeatureUpdatesEndTime", "PauseQualityUpdatesStartTime", "PauseQualityUpdatesEndTime")
+                foreach ($k in $polKeys) {
+                    Remove-ItemProperty -Path $polPath -Name $k -ErrorAction SilentlyContinue
                 }
 
                 # 2. Clean up GPO blocks
@@ -337,11 +405,16 @@ while ($true) {
             $sourceChoice = Read-Host "Select source (1-4) [Default: 1]"
             if (-not $sourceChoice) { $sourceChoice = "1" }
 
-            # 0. Deep Clean Incompatible Antivirus Remnants (360, AVG, Avast, Smadav, McAfee, Norton) from WMI & Registry
-            Write-Host "      [Cleaning] Purging leftover third-party Antivirus remnants (AVG, Avast, 360, Smadav, McAfee)..." -ForegroundColor Gray
+            # 0. Deep Clean Incompatible Antivirus Remnants from WMI, Services & Registry
+            Write-Host "      [Cleaning] Purging leftover third-party Antivirus remnants (360, AVG, Avast, Smadav, McAfee, Norton, Bitdefender, ESET, Malwarebytes, Avira, Sophos, TrendMicro, Webroot)..." -ForegroundColor Gray
             
             # Stop and remove leftover services
-            $avPatterns = '*360*', '*Qihu*', '*ZhuDong*', '*AVG*', '*Avast*', '*Smadav*', '*McAfee*', '*Norton*', '*Symantec*'
+            $avPatterns = @(
+                '*360*', '*Qihu*', '*ZhuDong*', '*AVG*', '*Avast*', '*Smadav*', '*McAfee*', '*Norton*', '*Symantec*',
+                '*Bitdefender*', '*ESET*', '*ekrn*', '*Malwarebytes*', '*MBAM*', '*Avira*', '*Sophos*', '*TrendMicro*',
+                '*Webroot*', '*WRSA*', '*Panda*', '*Baidu*', '*PCMatic*', '*BullGuard*', '*F-Secure*', '*Cylance*',
+                '*SentinelOne*', '*TotalAV*', '*K7AntiVirus*', '*RAV*', '*Reason*'
+            )
             Get-Service | Where-Object { 
                 $name = $_.Name; $disp = $_.DisplayName
                 ($avPatterns | Where-Object { $name -like $_ -or $disp -like $_ })
@@ -364,7 +437,26 @@ while ($true) {
                 "HKLM:\SOFTWARE\AVG", "HKLM:\SOFTWARE\WOW6432Node\AVG",
                 "HKLM:\SOFTWARE\Avast Software", "HKLM:\SOFTWARE\WOW6432Node\Avast Software",
                 "HKLM:\SOFTWARE\Smadav", "HKLM:\SOFTWARE\WOW6432Node\Smadav",
-                "HKLM:\SOFTWARE\McAfee", "HKLM:\SOFTWARE\WOW6432Node\McAfee"
+                "HKLM:\SOFTWARE\McAfee", "HKLM:\SOFTWARE\WOW6432Node\McAfee",
+                "HKLM:\SOFTWARE\Norton", "HKLM:\SOFTWARE\WOW6432Node\Norton",
+                "HKLM:\SOFTWARE\Symantec", "HKLM:\SOFTWARE\WOW6432Node\Symantec",
+                "HKLM:\SOFTWARE\Bitdefender", "HKLM:\SOFTWARE\WOW6432Node\Bitdefender",
+                "HKLM:\SOFTWARE\ESET", "HKLM:\SOFTWARE\WOW6432Node\ESET",
+                "HKLM:\SOFTWARE\Malwarebytes", "HKLM:\SOFTWARE\WOW6432Node\Malwarebytes",
+                "HKLM:\SOFTWARE\Avira", "HKLM:\SOFTWARE\WOW6432Node\Avira",
+                "HKLM:\SOFTWARE\Sophos", "HKLM:\SOFTWARE\WOW6432Node\Sophos",
+                "HKLM:\SOFTWARE\TrendMicro", "HKLM:\SOFTWARE\WOW6432Node\TrendMicro",
+                "HKLM:\SOFTWARE\WRSA", "HKLM:\SOFTWARE\WOW6432Node\WRSA",
+                "HKLM:\SOFTWARE\Panda Software", "HKLM:\SOFTWARE\WOW6432Node\Panda Software",
+                "HKLM:\SOFTWARE\BaiduSecurity", "HKLM:\SOFTWARE\WOW6432Node\BaiduSecurity",
+                "HKLM:\SOFTWARE\BullGuard", "HKLM:\SOFTWARE\WOW6432Node\BullGuard",
+                "HKLM:\SOFTWARE\F-Secure", "HKLM:\SOFTWARE\WOW6432Node\F-Secure",
+                "HKLM:\SOFTWARE\Cylance", "HKLM:\SOFTWARE\WOW6432Node\Cylance",
+                "HKLM:\SOFTWARE\SentinelOne", "HKLM:\SOFTWARE\WOW6432Node\SentinelOne",
+                "HKLM:\SOFTWARE\TotalAV", "HKLM:\SOFTWARE\WOW6432Node\TotalAV",
+                "HKLM:\SOFTWARE\RAV", "HKLM:\SOFTWARE\WOW6432Node\RAV",
+                "HKLM:\SOFTWARE\Reason Labs", "HKLM:\SOFTWARE\WOW6432Node\Reason Labs",
+                "HKLM:\SOFTWARE\Reason Cybersecurity", "HKLM:\SOFTWARE\WOW6432Node\Reason Cybersecurity"
             )
             foreach ($rPath in $oldAvRegs) {
                 if (Test-Path $rPath) { Remove-Item -Path $rPath -Recurse -Force -ErrorAction SilentlyContinue }
@@ -384,20 +476,26 @@ while ($true) {
                 $c1 = "$($drive):\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
                 $c2 = "$($drive):\soft\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
                 $c3 = "$($drive):\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-                if (Test-Path $c1) { $fdInstaller = $c1; break }
+                    if (Test-Path $c1) { $fdInstaller = $c1; break }
                 if (Test-Path $c2) { $fdInstaller = $c2; break }
                 if (Test-Path $c3) { $fdInstaller = $c3; break }
             }
 
+            $tempInstaller = "$env:SystemDrive\Temp\KES14_Setup.exe"
+            if (-not (Test-Path "$env:SystemDrive\Temp")) { New-Item -Path "$env:SystemDrive\Temp" -ItemType Directory -Force | Out-Null }
+
+            $targetInstallerToRun = $null
+
             switch ($sourceChoice) {
                 "2" {
                     if ($fdInstaller) {
-                        Write-Host "      [Flash Drive] Launching Kaspersky installer ($fdInstaller)..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $fdInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                        Write-Host "      [Flash Drive] Copying installer from USB to Local Disk ($tempInstaller)..." -ForegroundColor Gray
+                        Copy-Item -Path $fdInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk. You can now safely EJECT your Flash Drive (USB)!" -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                            $targetInstallerToRun = $fdInstaller
                         }
                     } else {
                         Write-Host "      [ERROR] Installer not found on any connected Flash Drive (USB)." -ForegroundColor Red
@@ -405,12 +503,12 @@ while ($true) {
                 }
                 "3" {
                     if (Test-Path $localInstaller) {
-                        Write-Host "      [Local] Launching Kaspersky installer..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $localInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                        if ($localInstaller -ne $tempInstaller) {
+                            Write-Host "      [Local Disk] Copying installer to Local Temp ($tempInstaller)..." -ForegroundColor Gray
+                            Copy-Item -Path $localInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                            if (Test-Path $tempInstaller) { $targetInstallerToRun = $tempInstaller } else { $targetInstallerToRun = $localInstaller }
                         } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                            $targetInstallerToRun = $localInstaller
                         }
                     } else {
                         Write-Host "      [ERROR] Local installer not found at $localInstaller." -ForegroundColor Red
@@ -418,9 +516,7 @@ while ($true) {
                 }
                 "4" {
                     if (Test-Path $uncInstaller) {
-                        Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
-                        $tempInstaller = "$env:TEMP\KES14_Setup.exe"
-                        
+                        Write-Host "      [Network Share] Copying installer from Network Share to Local Disk ($tempInstaller)..." -ForegroundColor Gray
                         $copySuccess = $false
                         try {
                             if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
@@ -436,23 +532,11 @@ while ($true) {
                             } catch { Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red }
                         }
 
-                        if ($copySuccess -and (Test-Path $tempInstaller)) {
-                            Write-Host "      [Network Share] Launching Kaspersky installer..." -ForegroundColor Gray
-                            $proc = Start-Process -FilePath $tempInstaller -Wait -PassThru
-                            Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk successfully." -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly..." -ForegroundColor Red
-                            $proc = Start-Process -FilePath $uncInstaller -Wait -PassThru
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                            $targetInstallerToRun = $uncInstaller
                         }
                     } else {
                         Write-Host "      [ERROR] Network share installer not found at $uncInstaller." -ForegroundColor Red
@@ -461,25 +545,20 @@ while ($true) {
                 default {
                     # Auto-Detect mode
                     if ($fdInstaller) {
-                        Write-Host "      [Flash Drive] Launching Kaspersky installer ($fdInstaller)..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $fdInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                        Write-Host "      [Auto-Detect: USB] Copying installer from USB to Local Disk ($tempInstaller)..." -ForegroundColor Gray
+                        Copy-Item -Path $fdInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk. You can now safely EJECT your Flash Drive (USB)!" -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                            $targetInstallerToRun = $fdInstaller
                         }
                     } elseif (Test-Path $localInstaller) {
-                        Write-Host "      [Local] Launching Kaspersky installer..." -ForegroundColor Gray
-                        $proc = Start-Process -FilePath $localInstaller -Wait -PassThru
-                        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                            Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
-                        } else {
-                            Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                        }
+                        Write-Host "      [Auto-Detect: Local] Copying installer to Local Temp ($tempInstaller)..." -ForegroundColor Gray
+                        Copy-Item -Path $localInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
+                        if (Test-Path $tempInstaller) { $targetInstallerToRun = $tempInstaller } else { $targetInstallerToRun = $localInstaller }
                     } elseif (Test-Path $uncInstaller) {
-                        Write-Host "      [Network Share] Copying installer to local temp (BITS / SMB)..." -ForegroundColor Gray
-                        $tempInstaller = "$env:TEMP\KES14_Setup.exe"
-                        
+                        Write-Host "      [Auto-Detect: Network Share] Copying installer to Local Disk ($tempInstaller)..." -ForegroundColor Gray
                         $copySuccess = $false
                         try {
                             if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
@@ -492,33 +571,100 @@ while ($true) {
                             try {
                                 Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
                                 $copySuccess = $true
-                            } catch { Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red }
+                            } catch {}
                         }
 
-                        if ($copySuccess -and (Test-Path $tempInstaller)) {
-                            Write-Host "      [Network Share] Launching Kaspersky installer..." -ForegroundColor Gray
-                            $proc = Start-Process -FilePath $tempInstaller -Wait -PassThru
-                            Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                        if (Test-Path $tempInstaller) {
+                            $targetInstallerToRun = $tempInstaller
+                            Write-Host "      [OK] Copied to Local Disk successfully." -ForegroundColor Green
                         } else {
-                            Write-Host "      [ERROR] Failed to copy installer from network share. Launching directly..." -ForegroundColor Red
-                            $proc = Start-Process -FilePath $uncInstaller -Wait -PassThru
-                            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                                Write-Host "      [OK] Kaspersky task completed." -ForegroundColor Green
-                            } else {
-                                Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                            }
+                            $targetInstallerToRun = $uncInstaller
                         }
-                    } else {
-                        Write-Host "      [ERROR] Kaspersky installer not found at local, USB, or network share path." -ForegroundColor Red
                     }
                 }
             }
+
+            if ($targetInstallerToRun -and (Test-Path $targetInstallerToRun)) {
+                Write-Host "      [Executing] Launching Kaspersky installer from Local Disk ($targetInstallerToRun)..." -ForegroundColor Yellow
+                $proc = Start-Process -FilePath $targetInstallerToRun -Wait -PassThru
+                if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                    Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
+                } else {
+                    Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
+                }
+                
+                # Cleanup local temp installer after execution finishes
+                if ($targetInstallerToRun -eq $tempInstaller) {
+                    Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
+                }
+            } else {
+                Write-Host "      [ERROR] Unable to locate or prepare Kaspersky installer." -ForegroundColor Red
+            }
+
             Write-Host "`n[OK] Kaspersky task completed." -ForegroundColor Green
+            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+            Read-Host | Out-Null
+        }
+        "9" {
+            Write-Host "`nApplying AutoCAD 2019 Genuine Telemetry & License Blocker..." -ForegroundColor Yellow
+            
+            # 1. Stop & Disable Autodesk Genuine Service
+            Write-Host "      [1/4] Stopping Autodesk Genuine & Licensing Services..." -ForegroundColor Gray
+            Stop-Service -Name "Autodesk Genuine Service" -Force -ErrorAction SilentlyContinue
+            Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
+            Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager" -Force -ErrorAction SilentlyContinue
+
+            # 2. Add Windows Firewall Block Rules
+            Write-Host "      [2/4] Adding Firewall outbound block rules for AutoCAD 2019..." -ForegroundColor Gray
+            netsh advfirewall firewall delete rule name="Block AutoCAD 2019 Outbound" >$null 2>&1
+            netsh advfirewall firewall delete rule name="Block AutoCAD 2019 Inbound" >$null 2>&1
+            netsh advfirewall firewall delete rule name="Block Autodesk Genuine Service Outbound" >$null 2>&1
+            netsh advfirewall firewall delete rule name="Block Autodesk Genuine Service Inbound" >$null 2>&1
+
+            netsh advfirewall firewall add rule name="Block AutoCAD 2019 Outbound" dir=out action=block program="C:\Program Files\Autodesk\AutoCAD 2019\acad.exe" enable=yes >$null 2>&1
+            netsh advfirewall firewall add rule name="Block AutoCAD 2019 Inbound" dir=in action=block program="C:\Program Files\Autodesk\AutoCAD 2019\acad.exe" enable=yes >$null 2>&1
+            netsh advfirewall firewall add rule name="Block Autodesk Genuine Service Outbound" dir=out action=block program="C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe" enable=yes >$null 2>&1
+            netsh advfirewall firewall add rule name="Block Autodesk Genuine Service Inbound" dir=in action=block program="C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe" enable=yes >$null 2>&1
+            netsh advfirewall firewall add rule name="Block Autodesk Licensing Agent Outbound" dir=out action=block program="C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe" enable=yes >$null 2>&1
+            netsh advfirewall firewall add rule name="Block Autodesk Desktop App Outbound" dir=out action=block program="C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe" enable=yes >$null 2>&1
+            netsh advfirewall firewall add rule name="Block Autodesk Application Manager Outbound" dir=out action=block program="C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe" enable=yes >$null 2>&1
+
+            # 3. Add Telemetry & Genuine Check Domains to Hosts file
+            Write-Host "      [3/4] Blocking Autodesk telemetry domains in Hosts file..." -ForegroundColor Gray
+            $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+            Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+            
+            $domainsToBlock = @(
+                "127.0.0.1 genuine-software2.autodesk.com",
+                "127.0.0.1 genuine-software.autodesk.com",
+                "127.0.0.1 ipm-provider.autodesk.com",
+                "127.0.0.1 api.autodesk.com",
+                "127.0.0.1 developer.api.autodesk.com",
+                "127.0.0.1 curson.autodesk.com",
+                "127.0.0.1 registeronce.autodesk.com",
+                "127.0.0.1 asset-direct.autodesk.com",
+                "127.0.0.1 analytics.autodesk.com",
+                "127.0.0.1 clm.autodesk.com",
+                "127.0.0.1 lic.autodesk.com"
+            )
+            
+            $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+            foreach ($entry in $domainsToBlock) {
+                if ($existingHosts -notcontains $entry) {
+                    Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue
+                }
+            }
+
+            # 4. IFEO Debugger Block & Flush DNS
+            Write-Host "      [4/4] Setting IFEO block and flushing DNS cache..." -ForegroundColor Gray
+            $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+            if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
+            Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
+            
+            Clear-DnsClientCache -ErrorAction SilentlyContinue
+
+            Write-Host "`n[OK] AutoCAD 2019 Genuine & License Blocker applied successfully!" -ForegroundColor Green
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
         }
