@@ -12,24 +12,26 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 while ($true) {
     Clear-Host
     Write-Host "=========================================================================" -ForegroundColor Cyan
-    Write-Host "                    IT SUPPORT TOOLKIT - MAIN MENU                       " -ForegroundColor Cyan
+    Write-Host "                    IT SUPPORT TOOLKIT - MENU UTAMA                      " -ForegroundColor Cyan
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "   [1] Install Standard Apps         (Chrome, Acrobat, WhatsApp, 7-Zip, AnyDesk, Zoom)"
-    Write-Host "   [2] Windows Tweaks & Optimizations (Dark Mode, Classic Explorer, Privacy)"
-    Write-Host "   [3] Repair System Corruption       (SFC Scannow & DISM RestoreHealth)"
-    Write-Host "   [4] Repair Print Spooler           (Clear & Restart Stuck Print Queue)"
-    Write-Host "   [5] Reset Network & Optimize Wi-Fi (Flush DNS, TCP Tuning, Low Latency)"
-    Write-Host "   [6] Manage Windows Auto-Update     (Pause 9999 Days / Resume)"
-    Write-Host "   [7] Setup Lansweeper Agent         (Set Hostname, Firewall & LsAgent)"
-    Write-Host "   [8] Install Kaspersky Antivirus    (Clean Old AV & Safe USB Eject)"
-    Write-Host "   [9] Block AutoCAD 2019 Telemetry   (Block Genuine Service & License Popups)"
+    Write-Host "   [1] Pasang Aplikasi Standar       (Chrome, Acrobat, WhatsApp, 7-Zip, AnyDesk, Zoom)"
+    Write-Host "   [2] Optimasi & Tampilan Windows    (Mode Gelap, Tampilan Klasik, Privasi)"
+    Write-Host "   [3] Perbaiki Sistem Rusak         (SFC Scannow & DISM RestoreHealth)"
+    Write-Host "   [4] Perbaiki Print Spooler         (Bersihkan & Restart Antrean Cetak Macet)"
+    Write-Host "   [5] Reset Jaringan & Optimasi WiFi (Flush DNS, Tuning TCP, Anti Lag/Drop)"
+    Write-Host "   [6] Pengaturan Windows Update      (Jeda Update 9999 Hari / Lanjutkan)"
+    Write-Host "   [7] Konfigurasi Lansweeper Agent   (Ubah Hostname, Buka Firewall & Pasang LsAgent)"
+    Write-Host "   [8] Pasang Kaspersky Antivirus     (Bersihkan AV Lama & Aman Cabut Flashdisk)"
+    Write-Host "   [9] Blokir Pop-up AutoCAD (Semua)  (Blokir Genuine Service & Lisensi Semua Versi)"
+    Write-Host "   [10] Pengaturan Sharing Folder SMB  (Sembunyikan Share $, Matikan Broadcast PC)"
+    Write-Host "   [11] Pindai Jaringan Lokal (LAN)    (Scan Cepat IP & Nama Komputer Aktif)"
     Write-Host ""
-    Write-Host "   [0] Exit" -ForegroundColor Red
+    Write-Host "   [0] Keluar" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "Select option (0-9)"
+    $choice = Read-Host "Pilih menu (0-11)"
 
     switch ($choice) {
         "1" {
@@ -606,28 +608,46 @@ while ($true) {
             Read-Host | Out-Null
         }
         "9" {
-            Write-Host "`nApplying AutoCAD 2019 Genuine Telemetry & License Blocker..." -ForegroundColor Yellow
+            Write-Host "`nApplying Universal AutoCAD Telemetry & Genuine License Blocker..." -ForegroundColor Yellow
             
-            # 1. Stop & Disable Autodesk Genuine Service
+            # 1. Stop & Disable Autodesk Genuine & Licensing Services
             Write-Host "      [1/4] Stopping Autodesk Genuine & Licensing Services..." -ForegroundColor Gray
-            Stop-Service -Name "Autodesk Genuine Service" -Force -ErrorAction SilentlyContinue
+            Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
             Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
-            Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager" -Force -ErrorAction SilentlyContinue
+            Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
+            Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager", "AutodeskDesktopApp", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
 
-            # 2. Add Windows Firewall Block Rules
-            Write-Host "      [2/4] Adding Firewall outbound block rules for AutoCAD 2019..." -ForegroundColor Gray
-            netsh advfirewall firewall delete rule name="Block AutoCAD 2019 Outbound" >$null 2>&1
-            netsh advfirewall firewall delete rule name="Block AutoCAD 2019 Inbound" >$null 2>&1
-            netsh advfirewall firewall delete rule name="Block Autodesk Genuine Service Outbound" >$null 2>&1
-            netsh advfirewall firewall delete rule name="Block Autodesk Genuine Service Inbound" >$null 2>&1
+            # 2. Dynamic Search & Block for All AutoCAD Versions (2016-2027+)
+            Write-Host "      [2/4] Scanning & Blocking Firewall for all installed AutoCAD versions..." -ForegroundColor Gray
+            $acadPaths = @(
+                Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+            )
+            
+            # Default known static binaries
+            $staticBinaries = @(
+                "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
+                "C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe",
+                "C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe",
+                "C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe",
+                "C:\Program Files\Common Files\Autodesk Shared\AdLM\R14\LTU.exe",
+                "C:\Program Files\Common Files\Autodesk Shared\AdLM\R15\LTU.exe"
+            )
 
-            netsh advfirewall firewall add rule name="Block AutoCAD 2019 Outbound" dir=out action=block program="C:\Program Files\Autodesk\AutoCAD 2019\acad.exe" enable=yes >$null 2>&1
-            netsh advfirewall firewall add rule name="Block AutoCAD 2019 Inbound" dir=in action=block program="C:\Program Files\Autodesk\AutoCAD 2019\acad.exe" enable=yes >$null 2>&1
-            netsh advfirewall firewall add rule name="Block Autodesk Genuine Service Outbound" dir=out action=block program="C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe" enable=yes >$null 2>&1
-            netsh advfirewall firewall add rule name="Block Autodesk Genuine Service Inbound" dir=in action=block program="C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe" enable=yes >$null 2>&1
-            netsh advfirewall firewall add rule name="Block Autodesk Licensing Agent Outbound" dir=out action=block program="C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe" enable=yes >$null 2>&1
-            netsh advfirewall firewall add rule name="Block Autodesk Desktop App Outbound" dir=out action=block program="C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe" enable=yes >$null 2>&1
-            netsh advfirewall firewall add rule name="Block Autodesk Application Manager Outbound" dir=out action=block program="C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe" enable=yes >$null 2>&1
+            $allTargets = ($acadPaths + $staticBinaries) | Select-Object -Unique
+
+            foreach ($bin in $allTargets) {
+                if (Test-Path $bin) {
+                    $bName = (Get-Item $bin).BaseName
+                    $pDir = (Get-Item $bin).Directory.Name
+                    $ruleName = "Block Autodesk ($pDir - $bName)"
+                    
+                    netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                    netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                    netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                    netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                    Write-Host "         [Blocked] $bin" -ForegroundColor DarkGray
+                }
+            }
 
             # 3. Add Telemetry & Genuine Check Domains to Hosts file
             Write-Host "      [3/4] Blocking Autodesk telemetry domains in Hosts file..." -ForegroundColor Gray
@@ -646,7 +666,9 @@ while ($true) {
                 "127.0.0.1 asset-direct.autodesk.com",
                 "127.0.0.1 analytics.autodesk.com",
                 "127.0.0.1 clm.autodesk.com",
-                "127.0.0.1 lic.autodesk.com"
+                "127.0.0.1 lic.autodesk.com",
+                "127.0.0.1 access.clm.autodesk.com",
+                "127.0.0.1 genuine-software1.autodesk.com"
             )
             
             $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
@@ -664,9 +686,222 @@ while ($true) {
             
             Clear-DnsClientCache -ErrorAction SilentlyContinue
 
-            Write-Host "`n[OK] AutoCAD 2019 Genuine & License Blocker applied successfully!" -ForegroundColor Green
+            Write-Host "`n[OK] Universal AutoCAD Genuine & License Blocker applied successfully!" -ForegroundColor Green
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
+        }
+        "10" {
+            while ($true) {
+                Clear-Host
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host "                  SMB SHARE & BROADCAST STEALTH MANAGER                  " -ForegroundColor Cyan
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
+                Write-Host "   --- Active Custom SMB Shares ---" -ForegroundColor Yellow
+                $shares = Get-SmbShare | Where-Object { -not $_.Special }
+                if ($shares) {
+                    $shares | Format-Table Name, Path, Description -AutoSize | Out-String | Write-Host -ForegroundColor White
+                } else {
+                    Write-Host "   (No active custom SMB shares found)`n" -ForegroundColor Gray
+                }
+
+                $fdStatus = (Get-Service -Name "FDResPub" -ErrorAction SilentlyContinue).Status
+                $fdColor = if ($fdStatus -eq "Running") { "Green" } else { "Red" }
+                Write-Host "   Network Discovery / Broadcast (FDResPub): $fdStatus" -ForegroundColor $fdColor
+                Write-Host ""
+                Write-Host "   [1] Convert Public Share to Hidden Share ($)  (Invisible in Network View)"
+                Write-Host "   [2] Convert Hidden Share ($) to Public Share  (Visible in Network View)"
+                Write-Host "   [3] Create New Hidden Share ($) from Folder   (Anonymous Full Access)"
+                Write-Host "   [4] Toggle PC Network Broadcast / Discovery   (Hide/Show PC in Network Tab)"
+                Write-Host "   [5] Flush NetBIOS / SMB Sessions on this PC   (Clear Stale Network Cache)"
+                Write-Host ""
+                Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
+
+                $smbChoice = Read-Host "Select SMB option (0-5)"
+                switch ($smbChoice) {
+                    "1" {
+                        $sName = Read-Host "`nEnter name of share to hide (e.g. Sharing)"
+                        $targetShare = Get-SmbShare -Name $sName -ErrorAction SilentlyContinue
+                        if ($targetShare) {
+                            $sPath = $targetShare.Path
+                            Remove-SmbShare -Name $sName -Force
+                            New-SmbShare -Name "$sName`$" -Path $sPath -FullAccess "Everyone" -Description "Hidden Share" | Out-Null
+                            Write-Host "`n[OK] Share converted to hidden: \\$env:COMPUTERNAME\$sName`$" -ForegroundColor Green
+                        } else {
+                            Write-Host "`n[ERROR] Share '$sName' not found." -ForegroundColor Red
+                        }
+                        Start-Sleep -Seconds 2
+                    }
+                    "2" {
+                        $sName = Read-Host "`nEnter name of hidden share to unhide (e.g. Sharing$)"
+                        $targetShare = Get-SmbShare -Name $sName -ErrorAction SilentlyContinue
+                        if ($targetShare) {
+                            $sPath = $targetShare.Path
+                            $cleanName = $sName.TrimEnd('$')
+                            Remove-SmbShare -Name $sName -Force
+                            New-SmbShare -Name $cleanName -Path $sPath -FullAccess "Everyone" -Description "Public Share" | Out-Null
+                            Write-Host "`n[OK] Share converted to public: \\$env:COMPUTERNAME\$cleanName" -ForegroundColor Green
+                        } else {
+                            Write-Host "`n[ERROR] Share '$sName' not found." -ForegroundColor Red
+                        }
+                        Start-Sleep -Seconds 2
+                    }
+                    "3" {
+                        $fPath = Read-Host "`nEnter full folder path to share (e.g. D:\Data)"
+                        if (Test-Path $fPath) {
+                            $defaultName = (Get-Item $fPath).Name
+                            $sName = Read-Host "Enter share name (default: $defaultName)"
+                            if ([string]::IsNullOrWhiteSpace($sName)) { $sName = $defaultName }
+                            if (-not $sName.EndsWith('$')) { $sName = "$sName`$" }
+                            
+                            # Set NTFS Permission for Everyone
+                            icacls "$fPath" /grant "Everyone:(OI)(CI)F" /T /C /Q | Out-Null
+                            icacls "$fPath" /grant "Authenticated Users:(OI)(CI)F" /T /C /Q | Out-Null
+                            
+                            New-SmbShare -Name $sName -Path $fPath -FullAccess "Everyone" -Description "Hidden Share" | Out-Null
+                            Write-Host "`n[OK] Hidden share created: \\$env:COMPUTERNAME\$sName" -ForegroundColor Green
+                        } else {
+                            Write-Host "`n[ERROR] Folder '$fPath' does not exist." -ForegroundColor Red
+                        }
+                        Start-Sleep -Seconds 2
+                    }
+                    "4" {
+                        $svc = Get-Service -Name "FDResPub" -ErrorAction SilentlyContinue
+                        if ($svc.Status -eq "Running") {
+                            Write-Host "`nDisabling PC Network Discovery / Broadcast..." -ForegroundColor Yellow
+                            Stop-Service -Name "FDResPub" -Force -ErrorAction SilentlyContinue
+                            Set-Service -Name "FDResPub" -StartupType Disabled
+                            Write-Host "[OK] PC is now HIDDEN from Network View on other computers." -ForegroundColor Green
+                        } else {
+                            Write-Host "`nEnabling PC Network Discovery / Broadcast..." -ForegroundColor Yellow
+                            Set-Service -Name "FDResPub" -StartupType Automatic
+                            Start-Service -Name "FDResPub" -ErrorAction SilentlyContinue
+                            Write-Host "[OK] PC is now VISIBLE in Network View on other computers." -ForegroundColor Green
+                        }
+                        Start-Sleep -Seconds 2
+                    }
+                    "5" {
+                        Write-Host "`nFlushing DNS, NetBIOS & SMB Sessions..." -ForegroundColor Yellow
+                        ipconfig /flushdns | Out-Null
+                        nbtstat -R | Out-Null
+                        nbtstat -RR | Out-Null
+                        net use * /delete /y >$null 2>&1
+                        Write-Host "[OK] Network cache & SMB sessions flushed successfully." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "0" { break }
+                }
+            }
+        }
+        "11" {
+            Clear-Host
+            Write-Host "=========================================================================" -ForegroundColor Cyan
+            Write-Host "             FAST MULTITHREADED NETWORK SCANNER (LAN)                    " -ForegroundColor Cyan
+            Write-Host "=========================================================================" -ForegroundColor Cyan
+            Write-Host ""
+            
+            # Detect active IPv4 subnets
+            $ips = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" }
+            $subnets = @()
+            foreach ($ip in $ips) {
+                $parts = $ip.IPAddress.Split('.')
+                if ($parts.Count -eq 4) {
+                    $sub = "$($parts[0]).$($parts[1]).$($parts[2])"
+                    if ($subnets -notcontains $sub) {
+                        $subnets += $sub
+                    }
+                }
+            }
+
+            Write-Host "Active Subnets Detected:" -ForegroundColor Yellow
+            for ($i = 0; $i -lt $subnets.Count; $i++) {
+                Write-Host "  [$($i + 1)] $($subnets[$i]).0/24 ($($ips[$i].InterfaceAlias))"
+            }
+            Write-Host "  [C] Custom Subnet Input (e.g. 192.168.10 or 172.168.39)"
+            Write-Host "  [A] Scan All Detected Subnets"
+            Write-Host "  [0] Back to Main Menu" -ForegroundColor Red
+            Write-Host ""
+
+            $scanChoice = Read-Host "Select option (1-$($subnets.Count) / C / A / 0)"
+            $chosenSubnets = @()
+
+            if ($scanChoice -match '^\d+$' -and [int]$scanChoice -ge 1 -and [int]$scanChoice -le $subnets.Count) {
+                $chosenSubnets += $subnets[[int]$scanChoice - 1]
+            } elseif ($scanChoice.ToUpper() -eq 'C') {
+                $custom = Read-Host "`nEnter first 3 octets of subnet (e.g. 192.168.10)"
+                if ($custom -match '^\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                    $chosenSubnets += $custom
+                } else {
+                    Write-Host "[ERROR] Invalid subnet format!" -ForegroundColor Red
+                    Start-Sleep -Seconds 2
+                }
+            } elseif ($scanChoice.ToUpper() -eq 'A') {
+                $chosenSubnets = $subnets
+            } elseif ($scanChoice -eq '0') {
+                # Return to menu
+                continue
+            }
+
+            if ($chosenSubnets.Count -gt 0) {
+                $timeout = 400
+                $results = @()
+
+                foreach ($subnet in $chosenSubnets) {
+                    Write-Host "`nScanning subnet: $subnet.0/24..." -ForegroundColor Yellow
+                    $tasks = @()
+                    $pings = @()
+                    
+                    1..254 | ForEach-Object {
+                        $ip = "$subnet.$_"
+                        $p = New-Object System.Net.NetworkInformation.Ping
+                        $pings += $p
+                        try {
+                            $tasks += $p.SendPingAsync($ip, $timeout)
+                        } catch {}
+                    }
+
+                    try {
+                        [System.Threading.Tasks.Task]::WaitAll($tasks)
+                    } catch {}
+
+                    for ($i = 0; $i -lt $tasks.Count; $i++) {
+                        try {
+                            if ($tasks[$i].IsCompleted -and $null -ne $tasks[$i].Result -and $tasks[$i].Result.Status -eq "Success") {
+                                $ip = $tasks[$i].Result.Address.IPAddressToString
+                                
+                                $hostname = "Unknown"
+                                try {
+                                    $hostEntry = [System.Net.Dns]::GetHostEntry($ip)
+                                    $hostname = $hostEntry.HostName
+                                } catch {}
+                                
+                                $results += [PSCustomObject]@{
+                                    Subnet    = "$subnet.0/24"
+                                    IPAddress = $ip
+                                    Hostname  = $hostname
+                                }
+                                Write-Host "  [*] Online: $ip ($hostname)" -ForegroundColor Green
+                            }
+                        } catch {}
+                    }
+                }
+
+                Write-Host "`n=========================================================================" -ForegroundColor Cyan
+                Write-Host "                        SCAN RESULTS SUMMARY                             " -ForegroundColor Cyan
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                if ($results.Count -gt 0) {
+                    $results | Format-Table -AutoSize | Out-String | Write-Host -ForegroundColor White
+                    Write-Host "Total Active Devices Found: $($results.Count)" -ForegroundColor Green
+                } else {
+                    Write-Host "No active devices found in the selected range." -ForegroundColor Yellow
+                }
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+
+                Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+                Read-Host | Out-Null
+            }
         }
         "0" { 
             exit 
