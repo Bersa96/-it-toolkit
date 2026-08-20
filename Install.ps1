@@ -608,87 +608,152 @@ while ($true) {
             Read-Host | Out-Null
         }
         "9" {
-            Write-Host "`nApplying Universal AutoCAD Telemetry & Genuine License Blocker..." -ForegroundColor Yellow
-            
-            # 1. Stop & Disable Autodesk Genuine & Licensing Services
-            Write-Host "      [1/4] Stopping Autodesk Genuine & Licensing Services..." -ForegroundColor Gray
-            Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
-            Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
-            Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
-            Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager", "AutodeskDesktopApp", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+            while ($true) {
+                Clear-Host
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host "               PENGELOLA BLOKIR POP-UP & TELEMETRI AUTOCAD               " -ForegroundColor Cyan
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
+                Write-Host "   [1] Jalankan Semua Proteksi Sekaligus  (Rekomendasi - Blokir Total)"
+                Write-Host "   [2] Matikan Service Autodesk Genuine   (Stop Service, Process & IFEO Lock)"
+                Write-Host "   [3] Blokir Firewall AutoCAD (Semua)    (Auto-Scan & Blokir Inbound/Outbound acad.exe)"
+                Write-Host "   [4] Blokir Domain Lisensi di Hosts     (Redirect Domain Telemetri ke 127.0.0.1)"
+                Write-Host "   [5] Buka Kembali Akses / Reset Blokir  (Hapus Rule Firewall & Normalisasi Hosts)"
+                Write-Host ""
+                Write-Host "   [0] Kembali ke Menu Utama" -ForegroundColor Red
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
 
-            # 2. Dynamic Search & Block for All AutoCAD Versions (2016-2027+)
-            Write-Host "      [2/4] Scanning & Blocking Firewall for all installed AutoCAD versions..." -ForegroundColor Gray
-            $acadPaths = @(
-                Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-            )
-            
-            # Default known static binaries
-            $staticBinaries = @(
-                "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
-                "C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe",
-                "C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe",
-                "C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe",
-                "C:\Program Files\Common Files\Autodesk Shared\AdLM\R14\LTU.exe",
-                "C:\Program Files\Common Files\Autodesk Shared\AdLM\R15\LTU.exe"
-            )
+                $cadChoice = Read-Host "Pilih opsi (0-5)"
+                switch ($cadChoice) {
+                    "1" {
+                        Write-Host "`nMenjalankan Seluruh Proteksi Pemblokiran Telemetri AutoCAD..." -ForegroundColor Yellow
+                        
+                        # 1. Service & IFEO
+                        Write-Host "      [1/3] Mematikan Autodesk Genuine & Licensing Services..." -ForegroundColor Gray
+                        Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                        Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                        Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                        Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager", "AutodeskDesktopApp", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                        $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+                        if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
+                        Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
 
-            $allTargets = ($acadPaths + $staticBinaries) | Select-Object -Unique
+                        # 2. Firewall
+                        Write-Host "      [2/3] Memindai dan memblokir Firewall untuk semua versi AutoCAD..." -ForegroundColor Gray
+                        $acadPaths = @(Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                        $staticBinaries = @(
+                            "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
+                            "C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe",
+                            "C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe",
+                            "C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe",
+                            "C:\Program Files\Common Files\Autodesk Shared\AdLM\R14\LTU.exe",
+                            "C:\Program Files\Common Files\Autodesk Shared\AdLM\R15\LTU.exe"
+                        )
+                        foreach ($bin in ($acadPaths + $staticBinaries | Select-Object -Unique)) {
+                            if (Test-Path $bin) {
+                                $bName = (Get-Item $bin).BaseName
+                                $pDir = (Get-Item $bin).Directory.Name
+                                $ruleName = "Block Autodesk ($pDir - $bName)"
+                                netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                Write-Host "         [Blocked] $bin" -ForegroundColor DarkGray
+                            }
+                        }
 
-            foreach ($bin in $allTargets) {
-                if (Test-Path $bin) {
-                    $bName = (Get-Item $bin).BaseName
-                    $pDir = (Get-Item $bin).Directory.Name
-                    $ruleName = "Block Autodesk ($pDir - $bName)"
-                    
-                    netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
-                    netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
-                    netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
-                    netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
-                    Write-Host "         [Blocked] $bin" -ForegroundColor DarkGray
+                        # 3. Hosts
+                        Write-Host "      [3/3] Memblokir domain telemetri di file Hosts..." -ForegroundColor Gray
+                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                        Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                        Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                        $domainsToBlock = @("127.0.0.1 genuine-software2.autodesk.com", "127.0.0.1 genuine-software.autodesk.com", "127.0.0.1 ipm-provider.autodesk.com", "127.0.0.1 api.autodesk.com", "127.0.0.1 developer.api.autodesk.com", "127.0.0.1 curson.autodesk.com", "127.0.0.1 registeronce.autodesk.com", "127.0.0.1 asset-direct.autodesk.com", "127.0.0.1 analytics.autodesk.com", "127.0.0.1 clm.autodesk.com", "127.0.0.1 lic.autodesk.com", "127.0.0.1 access.clm.autodesk.com", "127.0.0.1 genuine-software1.autodesk.com")
+                        $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                        foreach ($entry in $domainsToBlock) {
+                            if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
+                        }
+                        Clear-DnsClientCache -ErrorAction SilentlyContinue
+                        Write-Host "`n[OK] Seluruh proteksi pemblokiran AutoCAD berhasil diterapkan!" -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "2" {
+                        Write-Host "`nMematikan Autodesk Genuine & Licensing Services..." -ForegroundColor Yellow
+                        Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                        Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                        Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                        Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager", "AutodeskDesktopApp", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                        $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+                        if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
+                        Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
+                        Write-Host "[OK] Service Genuine dan penguncian IFEO berhasil diterapkan." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "3" {
+                        Write-Host "`nMemindai dan memblokir Firewall seluruh instalasi AutoCAD..." -ForegroundColor Yellow
+                        $acadPaths = @(Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                        $staticBinaries = @(
+                            "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
+                            "C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe",
+                            "C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe",
+                            "C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe",
+                            "C:\Program Files\Common Files\Autodesk Shared\AdLM\R14\LTU.exe",
+                            "C:\Program Files\Common Files\Autodesk Shared\AdLM\R15\LTU.exe"
+                        )
+                        $blockedCount = 0
+                        foreach ($bin in ($acadPaths + $staticBinaries | Select-Object -Unique)) {
+                            if (Test-Path $bin) {
+                                $bName = (Get-Item $bin).BaseName
+                                $pDir = (Get-Item $bin).Directory.Name
+                                $ruleName = "Block Autodesk ($pDir - $bName)"
+                                netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                Write-Host "   -> [Blocked] $bin" -ForegroundColor Gray
+                                $blockedCount++
+                            }
+                        }
+                        Write-Host "[OK] Selesai. $blockedCount file biner berhasil diblokir di Windows Firewall." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "4" {
+                        Write-Host "`nMenambahkan domain telemetri Autodesk ke file Hosts..." -ForegroundColor Yellow
+                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                        Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                        Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                        $domainsToBlock = @("127.0.0.1 genuine-software2.autodesk.com", "127.0.0.1 genuine-software.autodesk.com", "127.0.0.1 ipm-provider.autodesk.com", "127.0.0.1 api.autodesk.com", "127.0.0.1 developer.api.autodesk.com", "127.0.0.1 curson.autodesk.com", "127.0.0.1 registeronce.autodesk.com", "127.0.0.1 asset-direct.autodesk.com", "127.0.0.1 analytics.autodesk.com", "127.0.0.1 clm.autodesk.com", "127.0.0.1 lic.autodesk.com", "127.0.0.1 access.clm.autodesk.com", "127.0.0.1 genuine-software1.autodesk.com")
+                        $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                        foreach ($entry in $domainsToBlock) {
+                            if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
+                        }
+                        Clear-DnsClientCache -ErrorAction SilentlyContinue
+                        Write-Host "[OK] Domain telemetri Autodesk berhasil dialihkan ke 127.0.0.1." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "5" {
+                        Write-Host "`nMenghapus aturan blokir dan mereset file hosts..." -ForegroundColor Yellow
+                        # Remove Firewall rules
+                        netsh advfirewall firewall delete rule name="all" program="acad.exe" >$null 2>&1
+                        netsh advfirewall firewall delete rule name="Block Autodesk*" >$null 2>&1
+                        
+                        # Remove IFEO lock
+                        $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+                        if (Test-Path $ifeoPath) { Remove-Item -Path $ifeoPath -Recurse -Force -ErrorAction SilentlyContinue }
+
+                        # Clean hosts
+                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                        if (Test-Path $hostsPath) {
+                            $lines = Get-Content $hostsPath -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*autodesk.com*" }
+                            $lines | Set-Content $hostsPath -Force -ErrorAction SilentlyContinue
+                        }
+                        Clear-DnsClientCache -ErrorAction SilentlyContinue
+                        Write-Host "[OK] Aturan blokir telah di-reset ke kondisi awal." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "0" { break }
                 }
             }
-
-            # 3. Add Telemetry & Genuine Check Domains to Hosts file
-            Write-Host "      [3/4] Blocking Autodesk telemetry domains in Hosts file..." -ForegroundColor Gray
-            $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
-            Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
-            
-            $domainsToBlock = @(
-                "127.0.0.1 genuine-software2.autodesk.com",
-                "127.0.0.1 genuine-software.autodesk.com",
-                "127.0.0.1 ipm-provider.autodesk.com",
-                "127.0.0.1 api.autodesk.com",
-                "127.0.0.1 developer.api.autodesk.com",
-                "127.0.0.1 curson.autodesk.com",
-                "127.0.0.1 registeronce.autodesk.com",
-                "127.0.0.1 asset-direct.autodesk.com",
-                "127.0.0.1 analytics.autodesk.com",
-                "127.0.0.1 clm.autodesk.com",
-                "127.0.0.1 lic.autodesk.com",
-                "127.0.0.1 access.clm.autodesk.com",
-                "127.0.0.1 genuine-software1.autodesk.com"
-            )
-            
-            $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
-            foreach ($entry in $domainsToBlock) {
-                if ($existingHosts -notcontains $entry) {
-                    Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue
-                }
-            }
-
-            # 4. IFEO Debugger Block & Flush DNS
-            Write-Host "      [4/4] Setting IFEO block and flushing DNS cache..." -ForegroundColor Gray
-            $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
-            if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
-            Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
-            
-            Clear-DnsClientCache -ErrorAction SilentlyContinue
-
-            Write-Host "`n[OK] Universal AutoCAD Genuine & License Blocker applied successfully!" -ForegroundColor Green
-            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
-            Read-Host | Out-Null
         }
         "10" {
             while ($true) {
