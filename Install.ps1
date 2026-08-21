@@ -12,26 +12,26 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 while ($true) {
     Clear-Host
     Write-Host "=========================================================================" -ForegroundColor Cyan
-    Write-Host "                    IT SUPPORT TOOLKIT - MENU UTAMA                      " -ForegroundColor Cyan
+    Write-Host "                    IT SUPPORT TOOLKIT - MAIN MENU                       " -ForegroundColor Cyan
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "   [1] Pasang Aplikasi Standar       (Chrome, Acrobat, WhatsApp, 7-Zip, AnyDesk, Zoom)"
-    Write-Host "   [2] Optimasi & Tampilan Windows    (Mode Gelap, Tampilan Klasik, Privasi)"
-    Write-Host "   [3] Perbaiki Sistem Rusak         (SFC Scannow & DISM RestoreHealth)"
-    Write-Host "   [4] Perbaiki Print Spooler         (Bersihkan & Restart Antrean Cetak Macet)"
-    Write-Host "   [5] Reset Jaringan & Optimasi WiFi (Flush DNS, Tuning TCP, Anti Lag/Drop)"
-    Write-Host "   [6] Pengaturan Windows Update      (Jeda Update 9999 Hari / Lanjutkan)"
-    Write-Host "   [7] Konfigurasi Lansweeper Agent   (Ubah Hostname, Buka Firewall & Pasang LsAgent)"
-    Write-Host "   [8] Pasang Kaspersky Antivirus     (Bersihkan AV Lama & Aman Cabut Flashdisk)"
-    Write-Host "   [9] Blokir Pop-up AutoCAD (Semua)  (Blokir Genuine Service & Lisensi Semua Versi)"
-    Write-Host "   [10] Pengaturan Sharing Folder SMB  (Sembunyikan Share $, Matikan Broadcast PC)"
-    Write-Host "   [11] Pindai Jaringan Lokal (LAN)    (Scan Cepat IP & Nama Komputer Aktif)"
+    Write-Host "   [1] Install Standard Apps         (Chrome, Acrobat, WhatsApp, 7-Zip, AnyDesk, Zoom)"
+    Write-Host "   [2] Windows Tweaks & Optimizations (Dark Mode, Classic Explorer, Privacy)"
+    Write-Host "   [3] Repair System Corruption       (SFC Scannow & DISM RestoreHealth)"
+    Write-Host "   [4] Repair Print Spooler           (Clear & Restart Stuck Print Queue)"
+    Write-Host "   [5] Reset Network & Optimize Wi-Fi (Flush DNS, TCP Tuning, Low Latency)"
+    Write-Host "   [6] Manage Windows Auto-Update     (Pause 9999 Days / Resume)"
+    Write-Host "   [7] Setup Lansweeper Agent         (Set Hostname, Firewall & LsAgent)"
+    Write-Host "   [8] Install Kaspersky Antivirus    (Clean Old AV & Safe USB Eject)"
+    Write-Host "   [9] Block AutoCAD Telemetry (All)  (Block Genuine Service & License Popups for Any Version)"
+    Write-Host "   [10] SMB Share & Broadcast Manager  (Hide/Unhide Shares with $, Toggle Discovery)"
+    Write-Host "   [11] Scan Local Network (LAN)       (Fast Multithreaded IP & Hostname Scanner)"
     Write-Host ""
-    Write-Host "   [0] Keluar" -ForegroundColor Red
+    Write-Host "   [0] Exit" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "Pilih menu (0-11)"
+    $choice = Read-Host "Select option (0-11)"
 
     switch ($choice) {
         "1" {
@@ -611,23 +611,23 @@ while ($true) {
             while ($true) {
                 Clear-Host
                 Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host "               PENGELOLA BLOKIR POP-UP & TELEMETRI AUTOCAD               " -ForegroundColor Cyan
+                Write-Host "               AUTOCAD TELEMETRY & GENUINE BLOCKER MANAGER               " -ForegroundColor Cyan
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host ""
-                Write-Host "   [1] Jalankan Semua Proteksi Sekaligus  (Rekomendasi - Blokir Total)"
-                Write-Host "   [2] Matikan Service Autodesk Genuine   (Stop Service, Process & IFEO Lock)"
-                Write-Host "   [3] Blokir Firewall AutoCAD (Semua)    (Auto-Scan & Blokir Inbound/Outbound acad.exe)"
-                Write-Host "   [4] Blokir Domain Lisensi di Hosts     (Redirect Domain Telemetri ke 127.0.0.1)"
-                Write-Host "   [5] Buka Kembali Akses / Reset Blokir  (Hapus Rule Firewall & Normalisasi Hosts)"
+                Write-Host "   [1] Apply Full Protection              (Recommended - Complete Telemetry Block)"
+                Write-Host "   [2] Disable Autodesk Genuine Service   (Stop Service, Process & IFEO Lock)"
+                Write-Host "   [3] Block AutoCAD Firewall (All)       (Auto-Scan & Block Inbound/Outbound acad.exe)"
+                Write-Host "   [4] Block Telemetry Domains in Hosts   (Redirect Autodesk Licensing Domains to 127.0.0.1)"
+                Write-Host "   [5] Unblock / Reset Firewall & Hosts   (Remove Firewall Rules & Restore Hosts File)"
                 Write-Host ""
-                Write-Host "   [0] Kembali ke Menu Utama" -ForegroundColor Red
+                Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host ""
 
-                $cadChoice = Read-Host "Pilih opsi (0-5)"
+                $cadChoice = Read-Host "Select option (0-5)"
                 switch ($cadChoice) {
                     "1" {
-                        Write-Host "`nMenjalankan Seluruh Proteksi Pemblokiran Telemetri AutoCAD..." -ForegroundColor Yellow
+                        Write-Host "`nApplying Full AutoCAD Telemetry & License Protection..." -ForegroundColor Yellow
                         
                         # 1. Service & IFEO
                         Write-Host "      [1/3] Mematikan Autodesk Genuine & Licensing Services..." -ForegroundColor Gray
