@@ -24,14 +24,15 @@ while ($true) {
     Write-Host "   [7] Setup Lansweeper Agent         (Set Hostname, Firewall & LsAgent)"
     Write-Host "   [8] Install Kaspersky Antivirus    (Clean Old AV & Safe USB Eject)"
     Write-Host "   [9] Block AutoCAD Telemetry (All)  (Block Genuine Service & License Popups for Any Version)"
-    Write-Host "   [10] SMB Share & Broadcast Manager  (Hide/Unhide Shares with $, Toggle Discovery)"
-    Write-Host "   [11] Scan Local Network (LAN)       (Fast Multithreaded IP & Hostname Scanner)"
+    Write-Host "   [10] Block EaseUS Products Telemetry(Block Partition Master, Data Recovery, Todo Backup)"
+    Write-Host "   [11] SMB Share & Broadcast Manager  (Hide/Unhide Shares with $, Toggle Discovery)"
+    Write-Host "   [12] Scan Local Network (LAN)       (Fast Multithreaded IP & Hostname Scanner)"
     Write-Host ""
     Write-Host "   [0] Exit" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "Select option (0-11)"
+    $choice = Read-Host "Select option (0-12)"
 
     switch ($choice) {
         "1" {
@@ -798,6 +799,151 @@ while ($true) {
             while ($true) {
                 Clear-Host
                 Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host "             EASEUS PRODUCTS TELEMETRY & POP-UP BLOCKER                  " -ForegroundColor Cyan
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
+                Write-Host "   [1] Apply Full EaseUS Protection       (Firewall Block, Hosts Redirect & IFEO)"
+                Write-Host "   [2] Block EaseUS Firewall Binaries     (Partition Master, Data Recovery, Todo Backup)"
+                Write-Host "   [3] Block EaseUS Domains in Hosts      (Redirect EaseUS Tracking & Update Servers)"
+                Write-Host "   [4] Unblock / Reset EaseUS Blockers    (Restore Firewall & Hosts File)"
+                Write-Host ""
+                Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
+
+                $easeChoice = Read-Host "Select option (0-4)"
+                switch ($easeChoice) {
+                    "1" {
+                        Write-Host "`nApplying Full EaseUS Telemetry & Pop-up Protection..." -ForegroundColor Yellow
+                        
+                        # 1. Stop EaseUS services/processes
+                        Write-Host "      [1/3] Stopping background EaseUS services..." -ForegroundColor Gray
+                        Get-Service -Name "*EaseUS*", "*EuWatch*" -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+                        Stop-Process -Name "Main", "DRW", "DRWUI", "EaseUS*", "EuUpgrade*", "TBMain", "TBEnterprise*" -Force -ErrorAction SilentlyContinue
+
+                        # 2. Firewall block
+                        Write-Host "      [2/3] Scanning and blocking EaseUS application binaries..." -ForegroundColor Gray
+                        $easeusFolders = @(
+                            "C:\Program Files\EaseUS",
+                            "C:\Program Files (x86)\EaseUS",
+                            "C:\Program Files\EaseUS\EaseUS Partition Master",
+                            "C:\Program Files (x86)\EaseUS\EaseUS Partition Master",
+                            "C:\Program Files\EaseUS\EaseUS Data Recovery Wizard",
+                            "C:\Program Files (x86)\EaseUS\EaseUS Data Recovery Wizard",
+                            "C:\Program Files\EaseUS\Todo Backup",
+                            "C:\Program Files (x86)\EaseUS\Todo Backup"
+                        )
+                        $easeusBins = @()
+                        foreach ($ef in $easeusFolders) {
+                            if (Test-Path $ef) {
+                                $easeusBins += (Get-ChildItem -Path $ef -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                            }
+                        }
+
+                        $blockedCount = 0
+                        foreach ($bin in ($easeusBins | Select-Object -Unique)) {
+                            if (Test-Path $bin) {
+                                $bName = (Get-Item $bin).BaseName
+                                $pDir = (Get-Item $bin).Directory.Name
+                                $ruleName = "Block EaseUS ($pDir - $bName)"
+                                netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                Write-Host "         [Blocked] $bin" -ForegroundColor DarkGray
+                                $blockedCount++
+                            }
+                        }
+
+                        # 3. Hosts domains redirect
+                        Write-Host "      [3/3] Redirecting EaseUS telemetry domains in Hosts file..." -ForegroundColor Gray
+                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                        Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                        Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                        
+                        $easeDomains = @(
+                            "127.0.0.1 track.easeus.com",
+                            "127.0.0.1 tracking.easeus.com",
+                            "127.0.0.1 api.easeus.com",
+                            "127.0.0.1 apiv2.easeus.com",
+                            "127.0.0.1 activation.easeus.com",
+                            "127.0.0.1 stats.easeus.com",
+                            "127.0.0.1 update.easeus.com",
+                            "127.0.0.1 upgrade.easeus.com",
+                            "127.0.0.1 store.easeus.com",
+                            "127.0.0.1 cdn.easeus.com"
+                        )
+                        $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                        foreach ($entry in $easeDomains) {
+                            if ($existingHosts -notcontains $entry) {
+                                Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue
+                            }
+                        }
+                        Clear-DnsClientCache -ErrorAction SilentlyContinue
+
+                        Write-Host "`n[OK] EaseUS telemetry and licensing protection applied successfully ($blockedCount binaries blocked)!" -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "2" {
+                        Write-Host "`nScanning and blocking EaseUS application binaries..." -ForegroundColor Yellow
+                        $easeusFolders = @("C:\Program Files\EaseUS", "C:\Program Files (x86)\EaseUS")
+                        $easeusBins = @()
+                        foreach ($ef in $easeusFolders) {
+                            if (Test-Path $ef) {
+                                $easeusBins += (Get-ChildItem -Path $ef -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                            }
+                        }
+                        $blockedCount = 0
+                        foreach ($bin in ($easeusBins | Select-Object -Unique)) {
+                            if (Test-Path $bin) {
+                                $bName = (Get-Item $bin).BaseName
+                                $pDir = (Get-Item $bin).Directory.Name
+                                $ruleName = "Block EaseUS ($pDir - $bName)"
+                                netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                Write-Host "   -> [Blocked] $bin" -ForegroundColor Gray
+                                $blockedCount++
+                            }
+                        }
+                        Write-Host "[OK] Finished. $blockedCount EaseUS executables blocked in Firewall." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "3" {
+                        Write-Host "`nBlocking EaseUS telemetry & tracking domains in Hosts file..." -ForegroundColor Yellow
+                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                        Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                        Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                        $easeDomains = @("127.0.0.1 track.easeus.com", "127.0.0.1 tracking.easeus.com", "127.0.0.1 api.easeus.com", "127.0.0.1 apiv2.easeus.com", "127.0.0.1 activation.easeus.com", "127.0.0.1 stats.easeus.com", "127.0.0.1 update.easeus.com", "127.0.0.1 upgrade.easeus.com", "127.0.0.1 store.easeus.com", "127.0.0.1 cdn.easeus.com")
+                        $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                        foreach ($entry in $easeDomains) {
+                            if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
+                        }
+                        Clear-DnsClientCache -ErrorAction SilentlyContinue
+                        Write-Host "[OK] EaseUS domains redirected to 127.0.0.1." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "4" {
+                        Write-Host "`nResetting EaseUS firewall rules and hosts file..." -ForegroundColor Yellow
+                        netsh advfirewall firewall delete rule name="Block EaseUS*" >$null 2>&1
+                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                        if (Test-Path $hostsPath) {
+                            $lines = Get-Content $hostsPath -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*easeus.com*" }
+                            $lines | Set-Content $hostsPath -Force -ErrorAction SilentlyContinue
+                        }
+                        Clear-DnsClientCache -ErrorAction SilentlyContinue
+                        Write-Host "[OK] EaseUS blocker rules have been reset." -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
+                    "0" { break }
+                }
+            }
+        }
+        "11" {
+            while ($true) {
+                Clear-Host
+                Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host "                  SMB SHARE & BROADCAST STEALTH MANAGER                  " -ForegroundColor Cyan
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host ""
@@ -899,7 +1045,7 @@ while ($true) {
                 }
             }
         }
-        "11" {
+        "12" {
             Clear-Host
             Write-Host "=========================================================================" -ForegroundColor Cyan
             Write-Host "             FAST MULTITHREADED NETWORK SCANNER (LAN)                    " -ForegroundColor Cyan
