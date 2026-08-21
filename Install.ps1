@@ -35,55 +35,94 @@ while ($true) {
 
     switch ($choice) {
         "1" {
-            Write-Host "`nInstalling Standard Apps..." -ForegroundColor Yellow
-            
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+            while ($true) {
+                Clear-Host
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host "                    STANDARD APPS INSTALLER MANAGER                      " -ForegroundColor Cyan
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
+                Write-Host "   [A] Install All Standard Apps (Bulk Install Everything Below)" -ForegroundColor Green
+                Write-Host ""
+                Write-Host "   --- Select Individual App to Install ---" -ForegroundColor Yellow
+                Write-Host "   [1] Google Chrome            (Web Browser)"
+                Write-Host "   [2] Adobe Acrobat Reader DC  (PDF Reader)"
+                Write-Host "   [3] PDF24 Creator            (PDF Tools & Editor)"
+                Write-Host "   [4] WhatsApp Desktop         (Messaging App)"
+                Write-Host "   [5] 7-Zip (64-bit)           (Archive Extractor)"
+                Write-Host "   [6] VLC Media Player         (Video & Audio Player)"
+                Write-Host "   [7] AnyDesk Remote Desktop   (Remote Support Tool)"
+                Write-Host "   [8] Zoom Workplace           (Video Conferencing)"
+                Write-Host "   [9] Notion                   (Notes & Collaboration)"
+                Write-Host ""
+                Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
+                Write-Host "=========================================================================" -ForegroundColor Cyan
+                Write-Host ""
 
-            $apps = @(
-                @{ id = "WhatsApp.WhatsApp";               url = "https://desktop.whatsapp.com/releases/WinX64/WhatsAppSetup.exe"; out = "$env:TEMP\WA.exe"; args = "/silent" },
-                @{ id = "Google.Chrome";                  url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"; out = "$env:TEMP\Chrome.exe"; args = "/silent /install" },
-                @{ id = "Adobe.Acrobat.Reader.64-bit";    url = "https://ardownload2.adobe.com/pub/adobe/reader/win/AcrobatDC/2400120604/AcroRdrDC2400120604_en_US.exe"; out = "$env:TEMP\Acrobat.exe"; args = "/sAll /rs" },
-                @{ id = "geekwright.PDF24";               url = "https://download.pdf24.org/pdf24-creator-11.15.2-x64.exe"; out = "$env:TEMP\PDF24.exe"; args = "/VERYSILENT /NORESTART" },
-                @{ id = "7zip.7zip";                      url = "https://www.7-zip.org/a/7z2408-x64.exe"; out = "$env:TEMP\7zip.exe"; args = "/S" },
-                @{ id = "VideoLAN.VLC";                   url = "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe"; out = "$env:TEMP\VLC.exe"; args = "/S" },
-                @{ id = "AnyDeskSoftwareGmbH.AnyDesk";   url = "https://download.anydesk.com/AnyDesk.exe"; out = "$env:TEMP\AnyDesk.exe"; args = "--install `"C:\Program Files (x86)\AnyDesk`" --start-with-win --silent" },
-                @{ id = "Zoom.Zoom";                      url = "https://zoom.us/client/latest/ZoomInstaller.exe"; out = "$env:TEMP\Zoom.exe"; args = "/silent" },
-                @{ id = "Notion.Notion";                  url = "https://www.notion.so/desktop/windows/download"; out = "$env:TEMP\Notion.exe"; args = "/S" }
-            )
+                $appChoice = Read-Host "Select option (A / 1-9 / 0)"
 
-            foreach ($app in $apps) {
-                Write-Host "Installing $($app.id)..." -ForegroundColor Yellow
-                
-                $installed = $false
-                $wingetRes = & winget install --id $app.id --silent --accept-package-agreements --accept-source-agreements --scope machine --override "/silent" 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "      [OK] $($app.id) installed via Winget." -ForegroundColor Green
-                    $installed = $true
+                $appDefs = @{
+                    "1" = @{ name = "Google Chrome";           id = "Google.Chrome";                  url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"; out = "$env:TEMP\Chrome.exe"; args = "/silent /install" }
+                    "2" = @{ name = "Adobe Acrobat Reader";    id = "Adobe.Acrobat.Reader.64-bit";    url = "https://ardownload2.adobe.com/pub/adobe/reader/win/AcrobatDC/2400120604/AcroRdrDC2400120604_en_US.exe"; out = "$env:TEMP\Acrobat.exe"; args = "/sAll /rs" }
+                    "3" = @{ name = "PDF24 Creator";           id = "geekwright.PDF24";               url = "https://download.pdf24.org/pdf24-creator-11.15.2-x64.exe"; out = "$env:TEMP\PDF24.exe"; args = "/VERYSILENT /NORESTART" }
+                    "4" = @{ name = "WhatsApp Desktop";        id = "WhatsApp.WhatsApp";               url = "https://desktop.whatsapp.com/releases/WinX64/WhatsAppSetup.exe"; out = "$env:TEMP\WA.exe"; args = "/silent" }
+                    "5" = @{ name = "7-Zip";                   id = "7zip.7zip";                      url = "https://www.7-zip.org/a/7z2408-x64.exe"; out = "$env:TEMP\7zip.exe"; args = "/S" }
+                    "6" = @{ name = "VLC Media Player";        id = "VideoLAN.VLC";                   url = "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe"; out = "$env:TEMP\VLC.exe"; args = "/S" }
+                    "7" = @{ name = "AnyDesk";                 id = "AnyDeskSoftwareGmbH.AnyDesk";   url = "https://download.anydesk.com/AnyDesk.exe"; out = "$env:TEMP\AnyDesk.exe"; args = "--install `"C:\Program Files (x86)\AnyDesk`" --start-with-win --silent" }
+                    "8" = @{ name = "Zoom";                    id = "Zoom.Zoom";                      url = "https://zoom.us/client/latest/ZoomInstaller.exe"; out = "$env:TEMP\Zoom.exe"; args = "/silent" }
+                    "9" = @{ name = "Notion";                  id = "Notion.Notion";                  url = "https://www.notion.so/desktop/windows/download"; out = "$env:TEMP\Notion.exe"; args = "/S" }
                 }
-                
-                if (-not $installed) {
-                    Write-Host "      [Direct Download] Downloading from vendor..." -ForegroundColor Gray
-                    try {
-                        if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
-                            Start-BitsTransfer -Source $app.url -Destination $app.out -ErrorAction Stop
-                        } else {
-                            Invoke-WebRequest -Uri $app.url -OutFile $app.out -UseBasicParsing -ErrorAction Stop
+
+                if ($appChoice -eq "0") {
+                    break
+                }
+
+                $selectedApps = @()
+                if ($appChoice.ToUpper() -eq "A") {
+                    $selectedApps = @($appDefs["1"], $appDefs["2"], $appDefs["3"], $appDefs["4"], $appDefs["5"], $appDefs["6"], $appDefs["7"], $appDefs["8"], $appDefs["9"])
+                } elseif ($appDefs.ContainsKey($appChoice)) {
+                    $selectedApps = @($appDefs[$appChoice])
+                } else {
+                    Write-Host "`n[ERROR] Invalid selection." -ForegroundColor Red
+                    Start-Sleep -Seconds 2
+                    continue
+                }
+
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+
+                foreach ($app in $selectedApps) {
+                    Write-Host "`nInstalling $($app.name) ($($app.id))..." -ForegroundColor Yellow
+                    
+                    $installed = $false
+                    $wingetRes = & winget install --id $app.id --silent --accept-package-agreements --accept-source-agreements --scope machine --override "/silent" 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "   [OK] $($app.name) installed via Winget." -ForegroundColor Green
+                        $installed = $true
+                    }
+                    
+                    if (-not $installed) {
+                        Write-Host "   [Direct Download] Downloading from vendor..." -ForegroundColor Gray
+                        try {
+                            if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+                                Start-BitsTransfer -Source $app.url -Destination $app.out -ErrorAction Stop
+                            } else {
+                                Invoke-WebRequest -Uri $app.url -OutFile $app.out -UseBasicParsing -ErrorAction Stop
+                            }
+                            
+                            if (Test-Path $app.out) {
+                                $proc = Start-Process -FilePath $app.out -ArgumentList $app.args -PassThru -ErrorAction Stop
+                                $proc.WaitForExit()
+                                Remove-Item $app.out -Force -ErrorAction SilentlyContinue
+                                Write-Host "   [OK] $($app.name) installed successfully." -ForegroundColor Green
+                            }
+                        } catch {
+                            Write-Host "   [WARN] Direct download failed for $($app.name): $_" -ForegroundColor Red
                         }
-                        
-                        if (Test-Path $app.out) {
-                            $proc = Start-Process -FilePath $app.out -ArgumentList $app.args -PassThru -ErrorAction Stop
-                            $proc.WaitForExit()
-                            Remove-Item $app.out -Force -ErrorAction SilentlyContinue
-                            Write-Host "      [OK] $($app.id) installed successfully." -ForegroundColor Green
-                        }
-                    } catch {
-                        Write-Host "      [WARN] Direct download failed for $($app.id): $_" -ForegroundColor Red
                     }
                 }
+
+                Write-Host "`n[OK] Installation completed." -ForegroundColor Green
+                Start-Sleep -Seconds 2
             }
-            Write-Host "`n[OK] Installation process completed." -ForegroundColor Green
-            Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
-            Read-Host | Out-Null
         }
         "2" {
             Write-Host "`nApplying Windows 11 Tweaks..." -ForegroundColor Yellow
