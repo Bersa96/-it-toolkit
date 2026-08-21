@@ -23,16 +23,15 @@ while ($true) {
     Write-Host "   [6] Manage Windows Auto-Update     (Pause 9999 Days / Resume)"
     Write-Host "   [7] Setup Lansweeper Agent         (Set Hostname, Firewall & LsAgent)"
     Write-Host "   [8] Install Kaspersky Antivirus    (Clean Old AV & Safe USB Eject)"
-    Write-Host "   [9] Block AutoCAD Telemetry (All)  (Block Genuine Service & License Popups for Any Version)"
-    Write-Host "   [10] Block EaseUS Products Telemetry(Block Partition Master, Data Recovery, Todo Backup)"
-    Write-Host "   [11] SMB Share & Broadcast Manager  (Hide/Unhide Shares with $, Toggle Discovery)"
-    Write-Host "   [12] Scan Local Network (LAN)       (Fast Multithreaded IP & Hostname Scanner)"
+    Write-Host "   [9] Software Telemetry & Pop-up Blocker (AutoCAD All Versions, EaseUS Suite, Hosts & Firewall)"
+    Write-Host "   [10] SMB Share & Broadcast Manager  (Hide/Unhide Shares with $, Toggle Discovery)"
+    Write-Host "   [11] Scan Local Network (LAN)       (Fast Multithreaded IP & Hostname Scanner)"
     Write-Host ""
     Write-Host "   [0] Exit" -ForegroundColor Red
     Write-Host "=========================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "Select option (0-12)"
+    $choice = Read-Host "Select option (0-11)"
 
     switch ($choice) {
         "1" {
@@ -651,26 +650,27 @@ while ($true) {
             while ($true) {
                 Clear-Host
                 Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host "               AUTOCAD TELEMETRY & GENUINE BLOCKER MANAGER               " -ForegroundColor Cyan
+                Write-Host "             SOFTWARE TELEMETRY & POP-UP BLOCKER MANAGER                 " -ForegroundColor Cyan
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host ""
-                Write-Host "   [1] Apply Full Protection              (Recommended - Complete Telemetry Block)"
-                Write-Host "   [2] Disable Autodesk Genuine Service   (Stop Service, Process & IFEO Lock)"
-                Write-Host "   [3] Block AutoCAD Firewall (All)       (Auto-Scan & Block Inbound/Outbound acad.exe)"
-                Write-Host "   [4] Block Telemetry Domains in Hosts   (Redirect Autodesk Licensing Domains to 127.0.0.1)"
-                Write-Host "   [5] Unblock / Reset Firewall & Hosts   (Remove Firewall Rules & Restore Hosts File)"
+                Write-Host "   [A] Apply All Blockers (AutoCAD + EaseUS Full Protection)" -ForegroundColor Green
+                Write-Host ""
+                Write-Host "   --- Select Application to Manage ---" -ForegroundColor Yellow
+                Write-Host "   [1] Autodesk AutoCAD (All Versions)  (Genuine Service, Firewall & Hosts)"
+                Write-Host "   [2] EaseUS Software Products         (Partition Master, Data Recovery, Todo Backup)"
+                Write-Host "   [3] Unblock All Software & Reset     (Restore Default Hosts & Firewall Rules)"
                 Write-Host ""
                 Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host ""
 
-                $cadChoice = Read-Host "Select option (0-5)"
-                switch ($cadChoice) {
-                    "1" {
-                        Write-Host "`nApplying Full AutoCAD Telemetry & License Protection..." -ForegroundColor Yellow
+                $blockerChoice = Read-Host "Select option (A / 1-3 / 0)"
+                switch ($blockerChoice.ToUpper()) {
+                    "A" {
+                        Write-Host "`nApplying Full Protection for AutoCAD and EaseUS Suite..." -ForegroundColor Yellow
                         
-                        # 1. Service & IFEO
-                        Write-Host "      [1/3] Mematikan Autodesk Genuine & Licensing Services..." -ForegroundColor Gray
+                        # --- 1. AutoCAD Protection ---
+                        Write-Host "`n[1/2] Applying Autodesk AutoCAD Protection..." -ForegroundColor Cyan
                         Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
                         Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
                         Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
@@ -679,8 +679,6 @@ while ($true) {
                         if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
                         Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
 
-                        # 2. Firewall
-                        Write-Host "      [2/3] Memindai dan memblokir Firewall untuk semua versi AutoCAD..." -ForegroundColor Gray
                         $acadPaths = @(Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
                         $staticBinaries = @(
                             "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
@@ -699,193 +697,14 @@ while ($true) {
                                 netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
                                 netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
                                 netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
-                                Write-Host "         [Blocked] $bin" -ForegroundColor DarkGray
                             }
                         }
 
-                        # 3. Hosts
-                        Write-Host "      [3/3] Memblokir domain telemetri di file Hosts..." -ForegroundColor Gray
-                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
-                        Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
-                        $domainsToBlock = @("127.0.0.1 genuine-software2.autodesk.com", "127.0.0.1 genuine-software.autodesk.com", "127.0.0.1 ipm-provider.autodesk.com", "127.0.0.1 api.autodesk.com", "127.0.0.1 developer.api.autodesk.com", "127.0.0.1 curson.autodesk.com", "127.0.0.1 registeronce.autodesk.com", "127.0.0.1 asset-direct.autodesk.com", "127.0.0.1 analytics.autodesk.com", "127.0.0.1 clm.autodesk.com", "127.0.0.1 lic.autodesk.com", "127.0.0.1 access.clm.autodesk.com", "127.0.0.1 genuine-software1.autodesk.com")
-                        $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
-                        foreach ($entry in $domainsToBlock) {
-                            if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
-                        }
-                        Clear-DnsClientCache -ErrorAction SilentlyContinue
-                        Write-Host "`n[OK] Seluruh proteksi pemblokiran AutoCAD berhasil diterapkan!" -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "2" {
-                        Write-Host "`nMematikan Autodesk Genuine & Licensing Services..." -ForegroundColor Yellow
-                        Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
-                        Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
-                        Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
-                        Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager", "AutodeskDesktopApp", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
-                        $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
-                        if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
-                        Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
-                        Write-Host "[OK] Service Genuine dan penguncian IFEO berhasil diterapkan." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "3" {
-                        Write-Host "`nMemindai dan memblokir Firewall seluruh instalasi AutoCAD..." -ForegroundColor Yellow
-                        $acadPaths = @(Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
-                        $staticBinaries = @(
-                            "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
-                            "C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe",
-                            "C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe",
-                            "C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe",
-                            "C:\Program Files\Common Files\Autodesk Shared\AdLM\R14\LTU.exe",
-                            "C:\Program Files\Common Files\Autodesk Shared\AdLM\R15\LTU.exe"
-                        )
-                        $blockedCount = 0
-                        foreach ($bin in ($acadPaths + $staticBinaries | Select-Object -Unique)) {
-                            if (Test-Path $bin) {
-                                $bName = (Get-Item $bin).BaseName
-                                $pDir = (Get-Item $bin).Directory.Name
-                                $ruleName = "Block Autodesk ($pDir - $bName)"
-                                netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
-                                netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
-                                netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
-                                netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
-                                Write-Host "   -> [Blocked] $bin" -ForegroundColor Gray
-                                $blockedCount++
-                            }
-                        }
-                        Write-Host "[OK] Selesai. $blockedCount file biner berhasil diblokir di Windows Firewall." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "4" {
-                        Write-Host "`nMenambahkan domain telemetri Autodesk ke file Hosts..." -ForegroundColor Yellow
-                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
-                        Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
-                        $domainsToBlock = @("127.0.0.1 genuine-software2.autodesk.com", "127.0.0.1 genuine-software.autodesk.com", "127.0.0.1 ipm-provider.autodesk.com", "127.0.0.1 api.autodesk.com", "127.0.0.1 developer.api.autodesk.com", "127.0.0.1 curson.autodesk.com", "127.0.0.1 registeronce.autodesk.com", "127.0.0.1 asset-direct.autodesk.com", "127.0.0.1 analytics.autodesk.com", "127.0.0.1 clm.autodesk.com", "127.0.0.1 lic.autodesk.com", "127.0.0.1 access.clm.autodesk.com", "127.0.0.1 genuine-software1.autodesk.com")
-                        $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
-                        foreach ($entry in $domainsToBlock) {
-                            if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
-                        }
-                        Clear-DnsClientCache -ErrorAction SilentlyContinue
-                        Write-Host "[OK] Domain telemetri Autodesk berhasil dialihkan ke 127.0.0.1." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "5" {
-                        Write-Host "`nMenghapus aturan blokir dan mereset file hosts..." -ForegroundColor Yellow
-                        # Remove Firewall rules
-                        netsh advfirewall firewall delete rule name="all" program="acad.exe" >$null 2>&1
-                        netsh advfirewall firewall delete rule name="Block Autodesk*" >$null 2>&1
-                        
-                        # Remove IFEO lock
-                        $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
-                        if (Test-Path $ifeoPath) { Remove-Item -Path $ifeoPath -Recurse -Force -ErrorAction SilentlyContinue }
-
-                        # Clean hosts
-                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
-                        if (Test-Path $hostsPath) {
-                            $lines = Get-Content $hostsPath -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*autodesk.com*" }
-                            $lines | Set-Content $hostsPath -Force -ErrorAction SilentlyContinue
-                        }
-                        Clear-DnsClientCache -ErrorAction SilentlyContinue
-                        Write-Host "[OK] Aturan blokir telah di-reset ke kondisi awal." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "0" { break }
-                }
-            }
-        }
-        "10" {
-            while ($true) {
-                Clear-Host
-                Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host "             EASEUS PRODUCTS TELEMETRY & POP-UP BLOCKER                  " -ForegroundColor Cyan
-                Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host ""
-                Write-Host "   [1] Apply Full EaseUS Protection       (Firewall Block, Hosts Redirect & IFEO)"
-                Write-Host "   [2] Block EaseUS Firewall Binaries     (Partition Master, Data Recovery, Todo Backup)"
-                Write-Host "   [3] Block EaseUS Domains in Hosts      (Redirect EaseUS Tracking & Update Servers)"
-                Write-Host "   [4] Unblock / Reset EaseUS Blockers    (Restore Firewall & Hosts File)"
-                Write-Host ""
-                Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
-                Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host ""
-
-                $easeChoice = Read-Host "Select option (0-4)"
-                switch ($easeChoice) {
-                    "1" {
-                        Write-Host "`nApplying Full EaseUS Telemetry & Pop-up Protection..." -ForegroundColor Yellow
-                        
-                        # 1. Stop EaseUS services/processes
-                        Write-Host "      [1/3] Stopping background EaseUS services..." -ForegroundColor Gray
+                        # --- 2. EaseUS Protection ---
+                        Write-Host "`n[2/2] Applying EaseUS Suite Protection..." -ForegroundColor Cyan
                         Get-Service -Name "*EaseUS*", "*EuWatch*" -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
                         Stop-Process -Name "Main", "DRW", "DRWUI", "EaseUS*", "EuUpgrade*", "TBMain", "TBEnterprise*" -Force -ErrorAction SilentlyContinue
 
-                        # 2. Firewall block
-                        Write-Host "      [2/3] Scanning and blocking EaseUS application binaries..." -ForegroundColor Gray
-                        $easeusFolders = @(
-                            "C:\Program Files\EaseUS",
-                            "C:\Program Files (x86)\EaseUS",
-                            "C:\Program Files\EaseUS\EaseUS Partition Master",
-                            "C:\Program Files (x86)\EaseUS\EaseUS Partition Master",
-                            "C:\Program Files\EaseUS\EaseUS Data Recovery Wizard",
-                            "C:\Program Files (x86)\EaseUS\EaseUS Data Recovery Wizard",
-                            "C:\Program Files\EaseUS\Todo Backup",
-                            "C:\Program Files (x86)\EaseUS\Todo Backup"
-                        )
-                        $easeusBins = @()
-                        foreach ($ef in $easeusFolders) {
-                            if (Test-Path $ef) {
-                                $easeusBins += (Get-ChildItem -Path $ef -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
-                            }
-                        }
-
-                        $blockedCount = 0
-                        foreach ($bin in ($easeusBins | Select-Object -Unique)) {
-                            if (Test-Path $bin) {
-                                $bName = (Get-Item $bin).BaseName
-                                $pDir = (Get-Item $bin).Directory.Name
-                                $ruleName = "Block EaseUS ($pDir - $bName)"
-                                netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
-                                netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
-                                netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
-                                netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
-                                Write-Host "         [Blocked] $bin" -ForegroundColor DarkGray
-                                $blockedCount++
-                            }
-                        }
-
-                        # 3. Hosts domains redirect
-                        Write-Host "      [3/3] Redirecting EaseUS telemetry domains in Hosts file..." -ForegroundColor Gray
-                        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
-                        Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
-                        
-                        $easeDomains = @(
-                            "127.0.0.1 track.easeus.com",
-                            "127.0.0.1 tracking.easeus.com",
-                            "127.0.0.1 api.easeus.com",
-                            "127.0.0.1 apiv2.easeus.com",
-                            "127.0.0.1 activation.easeus.com",
-                            "127.0.0.1 stats.easeus.com",
-                            "127.0.0.1 update.easeus.com",
-                            "127.0.0.1 upgrade.easeus.com",
-                            "127.0.0.1 store.easeus.com",
-                            "127.0.0.1 cdn.easeus.com"
-                        )
-                        $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
-                        foreach ($entry in $easeDomains) {
-                            if ($existingHosts -notcontains $entry) {
-                                Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue
-                            }
-                        }
-                        Clear-DnsClientCache -ErrorAction SilentlyContinue
-
-                        Write-Host "`n[OK] EaseUS telemetry and licensing protection applied successfully ($blockedCount binaries blocked)!" -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "2" {
-                        Write-Host "`nScanning and blocking EaseUS application binaries..." -ForegroundColor Yellow
                         $easeusFolders = @("C:\Program Files\EaseUS", "C:\Program Files (x86)\EaseUS")
                         $easeusBins = @()
                         foreach ($ef in $easeusFolders) {
@@ -893,7 +712,6 @@ while ($true) {
                                 $easeusBins += (Get-ChildItem -Path $ef -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
                             }
                         }
-                        $blockedCount = 0
                         foreach ($bin in ($easeusBins | Select-Object -Unique)) {
                             if (Test-Path $bin) {
                                 $bName = (Get-Item $bin).BaseName
@@ -903,44 +721,298 @@ while ($true) {
                                 netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
                                 netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
                                 netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
-                                Write-Host "   -> [Blocked] $bin" -ForegroundColor Gray
-                                $blockedCount++
                             }
                         }
-                        Write-Host "[OK] Finished. $blockedCount EaseUS executables blocked in Firewall." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "3" {
-                        Write-Host "`nBlocking EaseUS telemetry & tracking domains in Hosts file..." -ForegroundColor Yellow
+
+                        # --- 3. Combined Hosts File ---
                         $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
                         Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
                         Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
-                        $easeDomains = @("127.0.0.1 track.easeus.com", "127.0.0.1 tracking.easeus.com", "127.0.0.1 api.easeus.com", "127.0.0.1 apiv2.easeus.com", "127.0.0.1 activation.easeus.com", "127.0.0.1 stats.easeus.com", "127.0.0.1 update.easeus.com", "127.0.0.1 upgrade.easeus.com", "127.0.0.1 store.easeus.com", "127.0.0.1 cdn.easeus.com")
+                        $combinedDomains = @(
+                            "127.0.0.1 genuine-software2.autodesk.com", "127.0.0.1 genuine-software.autodesk.com", "127.0.0.1 ipm-provider.autodesk.com", "127.0.0.1 api.autodesk.com", "127.0.0.1 developer.api.autodesk.com", "127.0.0.1 curson.autodesk.com", "127.0.0.1 registeronce.autodesk.com", "127.0.0.1 asset-direct.autodesk.com", "127.0.0.1 analytics.autodesk.com", "127.0.0.1 clm.autodesk.com", "127.0.0.1 lic.autodesk.com", "127.0.0.1 access.clm.autodesk.com", "127.0.0.1 genuine-software1.autodesk.com",
+                            "127.0.0.1 track.easeus.com", "127.0.0.1 tracking.easeus.com", "127.0.0.1 api.easeus.com", "127.0.0.1 apiv2.easeus.com", "127.0.0.1 activation.easeus.com", "127.0.0.1 stats.easeus.com", "127.0.0.1 update.easeus.com", "127.0.0.1 upgrade.easeus.com", "127.0.0.1 store.easeus.com", "127.0.0.1 cdn.easeus.com"
+                        )
                         $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
-                        foreach ($entry in $easeDomains) {
+                        foreach ($entry in $combinedDomains) {
                             if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
                         }
                         Clear-DnsClientCache -ErrorAction SilentlyContinue
-                        Write-Host "[OK] EaseUS domains redirected to 127.0.0.1." -ForegroundColor Green
+
+                        Write-Host "`n[OK] Full Protection for AutoCAD and EaseUS applied successfully!" -ForegroundColor Green
                         Start-Sleep -Seconds 2
                     }
-                    "4" {
-                        Write-Host "`nResetting EaseUS firewall rules and hosts file..." -ForegroundColor Yellow
+                    "1" {
+                        # AutoCAD Submenu
+                        while ($true) {
+                            Clear-Host
+                            Write-Host "=========================================================================" -ForegroundColor Cyan
+                            Write-Host "               AUTODESK AUTOCAD TELEMETRY BLOCKER MANAGER                " -ForegroundColor Cyan
+                            Write-Host "=========================================================================" -ForegroundColor Cyan
+                            Write-Host ""
+                            Write-Host "   [1] Apply Full AutoCAD Protection      (Services, Firewall & Hosts)"
+                            Write-Host "   [2] Disable Autodesk Genuine Service   (Stop Service, Process & IFEO Lock)"
+                            Write-Host "   [3] Block AutoCAD Firewall (All)       (Auto-Scan & Block Inbound/Outbound acad.exe)"
+                            Write-Host "   [4] Block AutoCAD Domains in Hosts     (Redirect Autodesk Domains to 127.0.0.1)"
+                            Write-Host "   [5] Unblock / Reset AutoCAD Rules      (Remove Rules & Restore Hosts File)"
+                            Write-Host ""
+                            Write-Host "   [0] Back to Blocker Menu" -ForegroundColor Red
+                            Write-Host "=========================================================================" -ForegroundColor Cyan
+                            Write-Host ""
+
+                            $subCad = Read-Host "Select option (0-5)"
+                            if ($subCad -eq "0") { break }
+
+                            switch ($subCad) {
+                                "1" {
+                                    Write-Host "`nApplying Full AutoCAD Telemetry & License Protection..." -ForegroundColor Yellow
+                                    Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                                    Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                                    Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                                    Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager", "AutodeskDesktopApp", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                                    $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+                                    if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
+                                    Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
+
+                                    $acadPaths = @(Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                                    $staticBinaries = @(
+                                        "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
+                                        "C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe",
+                                        "C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe",
+                                        "C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe",
+                                        "C:\Program Files\Common Files\Autodesk Shared\AdLM\R14\LTU.exe",
+                                        "C:\Program Files\Common Files\Autodesk Shared\AdLM\R15\LTU.exe"
+                                    )
+                                    foreach ($bin in ($acadPaths + $staticBinaries | Select-Object -Unique)) {
+                                        if (Test-Path $bin) {
+                                            $bName = (Get-Item $bin).BaseName
+                                            $pDir = (Get-Item $bin).Directory.Name
+                                            $ruleName = "Block Autodesk ($pDir - $bName)"
+                                            netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                            netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                        }
+                                    }
+
+                                    $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                                    Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                                    Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                                    $domainsToBlock = @("127.0.0.1 genuine-software2.autodesk.com", "127.0.0.1 genuine-software.autodesk.com", "127.0.0.1 ipm-provider.autodesk.com", "127.0.0.1 api.autodesk.com", "127.0.0.1 developer.api.autodesk.com", "127.0.0.1 curson.autodesk.com", "127.0.0.1 registeronce.autodesk.com", "127.0.0.1 asset-direct.autodesk.com", "127.0.0.1 analytics.autodesk.com", "127.0.0.1 clm.autodesk.com", "127.0.0.1 lic.autodesk.com", "127.0.0.1 access.clm.autodesk.com", "127.0.0.1 genuine-software1.autodesk.com")
+                                    $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                                    foreach ($entry in $domainsToBlock) {
+                                        if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
+                                    }
+                                    Clear-DnsClientCache -ErrorAction SilentlyContinue
+                                    Write-Host "`n[OK] AutoCAD Protection applied successfully!" -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                                "2" {
+                                    Write-Host "`nDisabling Autodesk Genuine & Licensing Services..." -ForegroundColor Yellow
+                                    Stop-Service -Name "Autodesk Genuine Service", "AdskLicensingService", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                                    Set-Service -Name "Autodesk Genuine Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                                    Set-Service -Name "AdAppMgr-Service" -StartupType Disabled -ErrorAction SilentlyContinue
+                                    Stop-Process -Name "GenuineService", "AdskLicensingAgent", "AdskIdentityManager", "AutodeskDesktopApp", "AdAppMgr-Service" -Force -ErrorAction SilentlyContinue
+                                    $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+                                    if (-not (Test-Path $ifeoPath)) { New-Item -Path $ifeoPath -Force | Out-Null }
+                                    Set-ItemProperty -Path $ifeoPath -Name "Debugger" -Value "systray.exe" -Force -ErrorAction SilentlyContinue
+                                    Write-Host "[OK] Genuine Service stopped & IFEO locked." -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                                "3" {
+                                    Write-Host "`nScanning and blocking Firewall for all installed AutoCAD versions..." -ForegroundColor Yellow
+                                    $acadPaths = @(Get-ChildItem -Path "C:\Program Files\Autodesk", "C:\Program Files (x86)\Autodesk" -Filter "acad.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                                    $staticBinaries = @(
+                                        "C:\Program Files\Autodesk\Autodesk Genuine Service\GenuineService.exe",
+                                        "C:\Program Files\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingAgent\AdskLicensingAgent.exe",
+                                        "C:\Program Files (x86)\Autodesk\Autodesk Desktop App\AutodeskDesktopApp.exe",
+                                        "C:\Program Files (x86)\Common Files\Autodesk Shared\AppManager\R1\AdAppMgr-Service.exe",
+                                        "C:\Program Files\Common Files\Autodesk Shared\AdLM\R14\LTU.exe",
+                                        "C:\Program Files\Common Files\Autodesk Shared\AdLM\R15\LTU.exe"
+                                    )
+                                    $blockedCount = 0
+                                    foreach ($bin in ($acadPaths + $staticBinaries | Select-Object -Unique)) {
+                                        if (Test-Path $bin) {
+                                            $bName = (Get-Item $bin).BaseName
+                                            $pDir = (Get-Item $bin).Directory.Name
+                                            $ruleName = "Block Autodesk ($pDir - $bName)"
+                                            netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                            netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                            $blockedCount++
+                                        }
+                                    }
+                                    Write-Host "[OK] $blockedCount AutoCAD executables blocked in Firewall." -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                                "4" {
+                                    Write-Host "`nBlocking AutoCAD domains in Hosts file..." -ForegroundColor Yellow
+                                    $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                                    Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                                    Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                                    $domainsToBlock = @("127.0.0.1 genuine-software2.autodesk.com", "127.0.0.1 genuine-software.autodesk.com", "127.0.0.1 ipm-provider.autodesk.com", "127.0.0.1 api.autodesk.com", "127.0.0.1 developer.api.autodesk.com", "127.0.0.1 curson.autodesk.com", "127.0.0.1 registeronce.autodesk.com", "127.0.0.1 asset-direct.autodesk.com", "127.0.0.1 analytics.autodesk.com", "127.0.0.1 clm.autodesk.com", "127.0.0.1 lic.autodesk.com", "127.0.0.1 access.clm.autodesk.com", "127.0.0.1 genuine-software1.autodesk.com")
+                                    $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                                    foreach ($entry in $domainsToBlock) {
+                                        if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
+                                    }
+                                    Clear-DnsClientCache -ErrorAction SilentlyContinue
+                                    Write-Host "[OK] AutoCAD domains redirected to 127.0.0.1." -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                                "5" {
+                                    Write-Host "`nResetting AutoCAD firewall rules and hosts..." -ForegroundColor Yellow
+                                    netsh advfirewall firewall delete rule name="all" program="acad.exe" >$null 2>&1
+                                    netsh advfirewall firewall delete rule name="Block Autodesk*" >$null 2>&1
+                                    $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+                                    if (Test-Path $ifeoPath) { Remove-Item -Path $ifeoPath -Recurse -Force -ErrorAction SilentlyContinue }
+                                    $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                                    if (Test-Path $hostsPath) {
+                                        $lines = Get-Content $hostsPath -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*autodesk.com*" }
+                                        $lines | Set-Content $hostsPath -Force -ErrorAction SilentlyContinue
+                                    }
+                                    Clear-DnsClientCache -ErrorAction SilentlyContinue
+                                    Write-Host "[OK] AutoCAD rules reset successfully." -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                            }
+                        }
+                    }
+                    "2" {
+                        # EaseUS Submenu
+                        while ($true) {
+                            Clear-Host
+                            Write-Host "=========================================================================" -ForegroundColor Cyan
+                            Write-Host "               EASEUS PRODUCTS TELEMETRY BLOCKER MANAGER                 " -ForegroundColor Cyan
+                            Write-Host "=========================================================================" -ForegroundColor Cyan
+                            Write-Host ""
+                            Write-Host "   [1] Apply Full EaseUS Protection       (Firewall Block, Hosts Redirect & Services)"
+                            Write-Host "   [2] Block EaseUS Firewall Binaries     (Partition Master, Data Recovery, Todo Backup)"
+                            Write-Host "   [3] Block EaseUS Domains in Hosts      (Redirect EaseUS Tracking & Update Servers)"
+                            Write-Host "   [4] Unblock / Reset EaseUS Blockers    (Restore Firewall & Hosts File)"
+                            Write-Host ""
+                            Write-Host "   [0] Back to Blocker Menu" -ForegroundColor Red
+                            Write-Host "=========================================================================" -ForegroundColor Cyan
+                            Write-Host ""
+
+                            $subEase = Read-Host "Select option (0-4)"
+                            if ($subEase -eq "0") { break }
+
+                            switch ($subEase) {
+                                "1" {
+                                    Write-Host "`nApplying Full EaseUS Telemetry & Pop-up Protection..." -ForegroundColor Yellow
+                                    Get-Service -Name "*EaseUS*", "*EuWatch*" -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+                                    Stop-Process -Name "Main", "DRW", "DRWUI", "EaseUS*", "EuUpgrade*", "TBMain", "TBEnterprise*" -Force -ErrorAction SilentlyContinue
+
+                                    $easeusFolders = @("C:\Program Files\EaseUS", "C:\Program Files (x86)\EaseUS")
+                                    $easeusBins = @()
+                                    foreach ($ef in $easeusFolders) {
+                                        if (Test-Path $ef) {
+                                            $easeusBins += (Get-ChildItem -Path $ef -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                                        }
+                                    }
+                                    $blockedCount = 0
+                                    foreach ($bin in ($easeusBins | Select-Object -Unique)) {
+                                        if (Test-Path $bin) {
+                                            $bName = (Get-Item $bin).BaseName
+                                            $pDir = (Get-Item $bin).Directory.Name
+                                            $ruleName = "Block EaseUS ($pDir - $bName)"
+                                            netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                            netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                            $blockedCount++
+                                        }
+                                    }
+
+                                    $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                                    Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                                    Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                                    $easeDomains = @("127.0.0.1 track.easeus.com", "127.0.0.1 tracking.easeus.com", "127.0.0.1 api.easeus.com", "127.0.0.1 apiv2.easeus.com", "127.0.0.1 activation.easeus.com", "127.0.0.1 stats.easeus.com", "127.0.0.1 update.easeus.com", "127.0.0.1 upgrade.easeus.com", "127.0.0.1 store.easeus.com", "127.0.0.1 cdn.easeus.com")
+                                    $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                                    foreach ($entry in $easeDomains) {
+                                        if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
+                                    }
+                                    Clear-DnsClientCache -ErrorAction SilentlyContinue
+                                    Write-Host "`n[OK] Full EaseUS Protection applied ($blockedCount binaries blocked)!" -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                                "2" {
+                                    Write-Host "`nScanning and blocking EaseUS application binaries in Firewall..." -ForegroundColor Yellow
+                                    $easeusFolders = @("C:\Program Files\EaseUS", "C:\Program Files (x86)\EaseUS")
+                                    $easeusBins = @()
+                                    foreach ($ef in $easeusFolders) {
+                                        if (Test-Path $ef) {
+                                            $easeusBins += (Get-ChildItem -Path $ef -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                                        }
+                                    }
+                                    $blockedCount = 0
+                                    foreach ($bin in ($easeusBins | Select-Object -Unique)) {
+                                        if (Test-Path $bin) {
+                                            $bName = (Get-Item $bin).BaseName
+                                            $pDir = (Get-Item $bin).Directory.Name
+                                            $ruleName = "Block EaseUS ($pDir - $bName)"
+                                            netsh advfirewall firewall delete rule name="$ruleName Outbound" >$null 2>&1
+                                            netsh advfirewall firewall delete rule name="$ruleName Inbound" >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Outbound" dir=out action=block program="$bin" enable=yes >$null 2>&1
+                                            netsh advfirewall firewall add rule name="$ruleName Inbound" dir=in action=block program="$bin" enable=yes >$null 2>&1
+                                            $blockedCount++
+                                        }
+                                    }
+                                    Write-Host "[OK] $blockedCount EaseUS executables blocked in Firewall." -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                                "3" {
+                                    Write-Host "`nBlocking EaseUS telemetry & tracking domains in Hosts file..." -ForegroundColor Yellow
+                                    $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                                    Unblock-File -Path $hostsPath -ErrorAction SilentlyContinue
+                                    Set-ItemProperty -Path $hostsPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                                    $easeDomains = @("127.0.0.1 track.easeus.com", "127.0.0.1 tracking.easeus.com", "127.0.0.1 api.easeus.com", "127.0.0.1 apiv2.easeus.com", "127.0.0.1 activation.easeus.com", "127.0.0.1 stats.easeus.com", "127.0.0.1 update.easeus.com", "127.0.0.1 upgrade.easeus.com", "127.0.0.1 store.easeus.com", "127.0.0.1 cdn.easeus.com")
+                                    $existingHosts = Get-Content $hostsPath -ErrorAction SilentlyContinue
+                                    foreach ($entry in $easeDomains) {
+                                        if ($existingHosts -notcontains $entry) { Add-Content -Path $hostsPath -Value $entry -ErrorAction SilentlyContinue }
+                                    }
+                                    Clear-DnsClientCache -ErrorAction SilentlyContinue
+                                    Write-Host "[OK] EaseUS domains redirected to 127.0.0.1." -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                                "4" {
+                                    Write-Host "`nResetting EaseUS firewall rules and hosts file..." -ForegroundColor Yellow
+                                    netsh advfirewall firewall delete rule name="Block EaseUS*" >$null 2>&1
+                                    $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+                                    if (Test-Path $hostsPath) {
+                                        $lines = Get-Content $hostsPath -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*easeus.com*" }
+                                        $lines | Set-Content $hostsPath -Force -ErrorAction SilentlyContinue
+                                    }
+                                    Clear-DnsClientCache -ErrorAction SilentlyContinue
+                                    Write-Host "[OK] EaseUS blocker rules have been reset." -ForegroundColor Green
+                                    Start-Sleep -Seconds 2
+                                }
+                            }
+                        }
+                    }
+                    "3" {
+                        Write-Host "`nUnblocking all software rules and restoring hosts file..." -ForegroundColor Yellow
+                        netsh advfirewall firewall delete rule name="all" program="acad.exe" >$null 2>&1
+                        netsh advfirewall firewall delete rule name="Block Autodesk*" >$null 2>&1
                         netsh advfirewall firewall delete rule name="Block EaseUS*" >$null 2>&1
+
+                        $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\GenuineService.exe"
+                        if (Test-Path $ifeoPath) { Remove-Item -Path $ifeoPath -Recurse -Force -ErrorAction SilentlyContinue }
+
                         $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
                         if (Test-Path $hostsPath) {
-                            $lines = Get-Content $hostsPath -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*easeus.com*" }
+                            $lines = Get-Content $hostsPath -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*autodesk.com*" -and $_ -notlike "*easeus.com*" }
                             $lines | Set-Content $hostsPath -Force -ErrorAction SilentlyContinue
                         }
                         Clear-DnsClientCache -ErrorAction SilentlyContinue
-                        Write-Host "[OK] EaseUS blocker rules have been reset." -ForegroundColor Green
+                        Write-Host "[OK] All software blocker rules reset to factory defaults." -ForegroundColor Green
                         Start-Sleep -Seconds 2
                     }
                     "0" { break }
                 }
             }
         }
-        "11" {
+        "10" {
             while ($true) {
                 Clear-Host
                 Write-Host "=========================================================================" -ForegroundColor Cyan
@@ -1045,7 +1117,7 @@ while ($true) {
                 }
             }
         }
-        "12" {
+        "11" {
             Clear-Host
             Write-Host "=========================================================================" -ForegroundColor Cyan
             Write-Host "             FAST MULTITHREADED NETWORK SCANNER (LAN)                    " -ForegroundColor Cyan
