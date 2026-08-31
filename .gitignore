@@ -1,0 +1,10 @@
+# Ignore local folders and launchers
+01_System_Fix_and_Cleanup/
+02_Network_and_SMB/
+03_Hardware_and_CNC/
+04_Lansweeper_and_Tools/
+*.bat
+*.cmd
+*.txt
+*.conf.lock
+*.lock
