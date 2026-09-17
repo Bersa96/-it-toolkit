@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Continue'
+﻿$ErrorActionPreference = 'Continue'
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -95,19 +95,68 @@ function Get-ToolkitDeploymentCredential {
     return $script:ToolkitDeploymentCredential
 }
 
-function Install-ToolkitAgent {
-    param([string]$Installer, [string]$Arguments, [string]$ServiceName)
+function Set-ToolkitLocalAccountDisplayName {
+    Write-Host "`nOptional: update a local account's display/full name (does not rename the account or profile folder)." -ForegroundColor Cyan
+    $accountName = (Read-Host 'Local username to update [Press Enter to skip]').Trim()
+    if ([string]::IsNullOrWhiteSpace($accountName)) {
+        Write-Host '      [SKIPPED] Local account display name was not changed.' -ForegroundColor Gray
+        return $false
+    }
+
     try {
-        # Stage PSDrive/UNC installers locally before passing them to a native process.
-        $stage = Join-Path $env:TEMP ('ToolkitAgent-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
-        $stagedExe = Join-Path $stage 'agent-installer.exe'
-        Copy-Item -LiteralPath $Installer -Destination $stagedExe -ErrorAction Stop
-        $process = Start-Process -FilePath $stagedExe -ArgumentList $Arguments -Wait -PassThru -ErrorAction Stop
-        if ($process.ExitCode -notin @(0, 3010)) { throw "Installer exit code: $($process.ExitCode)" }
-        if ($process.ExitCode -eq 3010) {
-            Write-Host '[PENDING] Installer requires a reboot; no reboot was triggered.' -ForegroundColor Yellow
+        $account = Get-LocalUser -Name $accountName -ErrorAction Stop
+        $displayName = (Read-Host "Display/full name for '$($account.Name)' [Press Enter to skip]").Trim()
+        if ([string]::IsNullOrWhiteSpace($displayName)) {
+            Write-Host '      [SKIPPED] Local account display name was not changed.' -ForegroundColor Gray
             return $false
+        }
+
+        Set-LocalUser -Name $account.Name -FullName $displayName -ErrorAction Stop | Out-Null
+        $updatedAccount = Get-LocalUser -Name $account.Name -ErrorAction Stop
+        if ($updatedAccount.FullName -ne $displayName) {
+            throw 'Windows did not retain the requested display/full name.'
+        }
+        Write-Host "      [OK] Local account '$($account.Name)' display/full name set to '$displayName'." -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "      [ERROR] Could not update the local account display/full name: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host '      This setting applies to local Windows accounts only; domain accounts are not modified.' -ForegroundColor Yellow
+        return $false
+    }
+}
+
+function Install-ToolkitAgent {
+    param([string]$Installer, [string]$Arguments, [string]$ServiceName, [string]$SourceLabel = 'Installer source')
+    $stage = Join-Path "$env:SystemDrive\Temp" ('ToolkitAgent-' + [guid]::NewGuid().ToString('N'))
+    $stagedExe = Join-Path $stage ([System.IO.Path]::GetFileName($Installer))
+    $partialExe = "$stagedExe.partial"
+    $copyVerified = $false
+    $retainStage = $false
+    try {
+        New-Item -ItemType Directory -Path $stage -Force -ErrorAction Stop | Out-Null
+        $sourceFile = Get-Item -LiteralPath $Installer -ErrorAction Stop
+        if ($sourceFile.Length -le 0) { throw 'Installer source is empty.' }
+        Write-Host "      [$SourceLabel] Copying $($sourceFile.Name) to $stage ..." -ForegroundColor Gray
+        Copy-Item -LiteralPath $Installer -Destination $partialExe -ErrorAction Stop
+        $copiedFile = Get-Item -LiteralPath $partialExe -ErrorAction Stop
+        $sourceHash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256 -ErrorAction Stop).Hash
+        $copiedHash = (Get-FileHash -LiteralPath $partialExe -Algorithm SHA256 -ErrorAction Stop).Hash
+        if ($copiedFile.Length -ne $sourceFile.Length -or $copiedHash -ne $sourceHash) {
+            throw 'The staged installer does not match the source file (size/SHA-256 verification failed).'
+        }
+        Move-Item -LiteralPath $partialExe -Destination $stagedExe -ErrorAction Stop
+        $copyVerified = $true
+        Write-Host '      [OK] Installer copied and SHA-256 verified. USB can now be ejected.' -ForegroundColor Green
+        Write-Host "      [Executing] Launching the verified local copy: $stagedExe" -ForegroundColor Yellow
+        $process = Start-Process -FilePath $stagedExe -ArgumentList $Arguments -Wait -PassThru -ErrorAction Stop
+        if ($process.ExitCode -eq 3010) {
+            Write-Host '[PENDING] Installer returned 3010 and requires a reboot; no reboot was triggered.' -ForegroundColor Yellow
+            return $false
+        }
+        if ($process.ExitCode -ne 0) { throw "Installer exit code: $($process.ExitCode)" }
+        $service = Get-Service -Name $ServiceName -ErrorAction Stop
+        if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) {
+            Start-Service -Name $ServiceName -ErrorAction Stop
         }
         $service = Get-Service -Name $ServiceName -ErrorAction Stop
         $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
@@ -115,11 +164,45 @@ function Install-ToolkitAgent {
         return $true
     } catch {
         Write-Host "[ERROR] Agent installation not verified: $($_.Exception.Message)" -ForegroundColor Red
+        if ($copyVerified -and (Test-Path -LiteralPath $stagedExe -PathType Leaf)) {
+            $retainStage = $true
+            Write-Host "      [DIAGNOSTIC] Verified installer retained at $stagedExe" -ForegroundColor Yellow
+        }
         return $false
     } finally {
-        if ($stagedExe -and (Test-Path -LiteralPath $stagedExe)) { Remove-Item -LiteralPath $stagedExe -Force -ErrorAction SilentlyContinue }
-        if ($stage -and (Test-Path -LiteralPath $stage)) { Remove-Item -LiteralPath $stage -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $partialExe) { Remove-Item -LiteralPath $partialExe -Force -ErrorAction SilentlyContinue }
+        if (-not $retainStage -and (Test-Path -LiteralPath $stage)) {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
+}
+
+function Find-ToolkitUsbInstaller {
+    param([Parameter(Mandatory = $true)][string]$FileName)
+
+    $driveLetters = @()
+    if ($PSScriptRoot) {
+        try {
+            $scriptDrive = (Get-Item -LiteralPath $PSScriptRoot -ErrorAction Stop).PSDrive.Name
+            $scriptVolume = Get-Volume -DriveLetter $scriptDrive -ErrorAction SilentlyContinue
+            if ($scriptVolume.DriveType -eq 'Removable') { $driveLetters += $scriptDrive }
+        } catch { }
+    }
+    $driveLetters += Get-Volume -ErrorAction SilentlyContinue |
+        Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } |
+        Select-Object -ExpandProperty DriveLetter
+    $driveLetters = @($driveLetters | Where-Object { $_ } | Select-Object -Unique)
+    $folders = @('software\Software', 'Software', 'software\soft', 'soft', 'software', '')
+
+    foreach ($driveLetter in $driveLetters) {
+        $root = '{0}:\' -f $driveLetter
+        foreach ($folder in $folders) {
+            $basePath = if ($folder) { Join-Path $root $folder } else { $root }
+            $candidate = Join-Path $basePath $FileName
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+    }
+    return $null
 }
 
 function Connect-ToolkitDeploymentShare {
@@ -137,6 +220,250 @@ function Connect-ToolkitDeploymentShare {
     } catch {
         Write-Host "[ERROR] Unable to connect to $Root : $($_.Exception.Message)" -ForegroundColor Red
         return $false
+    }
+}
+
+
+function Find-ToolkitInstaller {
+    param(
+        [string[]]$Patterns,
+        [string[]]$AdditionalPaths = @()
+    )
+
+    $searchDrives = @()
+    if ($PSScriptRoot) {
+        $sDrive = (Get-Item $PSScriptRoot -ErrorAction SilentlyContinue).PSDrive.Name
+        if ($sDrive) { $searchDrives += $sDrive }
+    }
+    $searchDrives += (Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter)
+    $searchDrives += (Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.DriveLetter -ne 'C' } | Select-Object -ExpandProperty DriveLetter)
+    $searchDrives = $searchDrives | Where-Object { $_ } | Select-Object -Unique
+
+    $subFolders = @('software\Software', 'Software', 'software\soft', 'software', 'soft', '')
+    $searchFolders = @()
+    if ($PSScriptRoot) {
+        $searchFolders += $PSScriptRoot
+        $searchFolders += (Join-Path $PSScriptRoot 'software\Software')
+        $searchFolders += (Join-Path $PSScriptRoot 'Software')
+        $searchFolders += (Join-Path $PSScriptRoot 'software\soft')
+        $searchFolders += (Join-Path $PSScriptRoot 'soft')
+        $searchFolders += (Join-Path $PSScriptRoot 'software')
+    }
+    foreach ($d in $searchDrives) {
+        foreach ($sf in $subFolders) {
+            $folder = if ($sf) { "$($d):\$sf" } else { "$($d):\" }
+            $searchFolders += $folder
+        }
+    }
+    if ($AdditionalPaths) { $searchFolders += $AdditionalPaths }
+    $searchFolders = $searchFolders | Select-Object -Unique
+
+    foreach ($folder in $searchFolders) {
+        if (Test-Path -LiteralPath $folder) {
+            foreach ($pattern in $Patterns) {
+                $found = Get-ChildItem -LiteralPath $folder -Filter $pattern -File -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found) {
+                    return $found.FullName
+                }
+            }
+        }
+    }
+    return $null
+}
+
+function Get-ToolkitPrinterInventory {
+    @(
+        Get-Printer -ErrorAction SilentlyContinue | ForEach-Object {
+            [pscustomobject]@{
+                Name      = $_.Name
+                Shared    = [bool]$_.Shared
+                ShareName = $_.ShareName
+                Driver    = $_.DriverName
+                Port      = $_.PortName
+                Status    = $_.PrinterStatus
+            }
+        }
+    )
+}
+
+function Get-ToolkitDefaultPrinterShareName {
+    param([Parameter(Mandatory = $true)][string]$PrinterName)
+
+    $shareName = ($PrinterName -replace '[\\/:*?"<>|]', '_').Trim()
+    if ([string]::IsNullOrWhiteSpace($shareName)) { $shareName = 'SharedPrinter' }
+    if ($shareName.Length -gt 80) { $shareName = $shareName.Substring(0, 80).Trim() }
+    return $shareName
+}
+
+function Test-ToolkitPrinterShareName {
+    param([string]$ShareName)
+
+    return -not [string]::IsNullOrWhiteSpace($ShareName) -and
+        $ShareName -notmatch '[\\/:*?"<>|]' -and
+        $ShareName -notmatch '^(\.|\.\.)$'
+}
+
+function Enable-ToolkitPrinterSharingFirewall {
+    # Prefer the firewall cmdlets so we can avoid enabling printer sharing on
+    # Public profiles. Fall back to netsh on older Windows builds.
+    $rules = @(
+        Get-NetFirewallRule -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.DisplayGroup -match 'File\s+and\s+Printer\s+Sharing|Printer\s+Sharing' -or
+                $_.Group -match 'FileAndPrinterSharing'
+            }
+    )
+    if ($rules.Count -gt 0) {
+        try {
+            $rules | Set-NetFirewallRule -Enabled True -Profile Domain,Private -ErrorAction Stop
+            return $true
+        } catch {
+            Write-Host "[WARN] Could not scope printer-sharing firewall rules to Domain/Private profiles: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=Yes >$null 2>&1
+    if ($LASTEXITCODE -eq 0) { return $true }
+    return $false
+}
+
+function Set-ToolkitPrinterShare {
+    param(
+        [Parameter(Mandatory = $true)][string]$PrinterName,
+        [Parameter(Mandatory = $true)][string]$ShareName
+    )
+
+    if (-not (Test-ToolkitPrinterShareName -ShareName $ShareName)) {
+        Write-Host '[ERROR] Invalid share name. Do not use \\, /, :, *, ?, " < > or |.' -ForegroundColor Red
+        return $false
+    }
+
+    $printer = Get-Printer -Name $PrinterName -ErrorAction SilentlyContinue
+    if (-not $printer) {
+        Write-Host "[ERROR] Printer '$PrinterName' was not found on this PC." -ForegroundColor Red
+        return $false
+    }
+
+    $conflict = Get-Printer -ErrorAction SilentlyContinue |
+        Where-Object { $_.Shared -and $_.ShareName -eq $ShareName -and $_.Name -ne $PrinterName } |
+        Select-Object -First 1
+    if ($conflict) {
+        Write-Host "[ERROR] Share name '$ShareName' is already used by '$($conflict.Name)'." -ForegroundColor Red
+        return $false
+    }
+
+    try {
+        $spooler = Get-Service -Name spooler -ErrorAction Stop
+        if ($spooler.Status -ne 'Running') {
+            Set-Service -Name spooler -StartupType Automatic -ErrorAction Stop
+            Start-Service -Name spooler -ErrorAction Stop
+        }
+        Set-Printer -Name $PrinterName -Shared $true -ShareName $ShareName -ErrorAction Stop
+        if (-not (Enable-ToolkitPrinterSharingFirewall)) {
+            Write-Host '[WARN] Printer sharing was enabled, but the firewall rule could not be verified.' -ForegroundColor Yellow
+        }
+
+        $verify = Get-Printer -Name $PrinterName -ErrorAction Stop
+        if (-not $verify.Shared -or $verify.ShareName -ne $ShareName) {
+            throw 'Windows did not report the expected shared-printer state.'
+        }
+        Write-Host "[OK] Host printer share created: \\$env:COMPUTERNAME\$ShareName" -ForegroundColor Green
+        Write-Host '     Clients can connect using the host name or a stable IP address.' -ForegroundColor Gray
+        return $true
+    } catch {
+        Write-Host "[ERROR] Could not share printer '$PrinterName': $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+function Add-ToolkitSharedPrinterClient {
+    $hostInput = Read-Host "Enter printer host name or IP address (e.g. 192.168.10.160)"
+    $hostName = $hostInput.Trim().TrimStart('\\').TrimEnd('\\')
+    $shareName = (Read-Host 'Enter printer share name (without \\)').Trim()
+
+    if ([string]::IsNullOrWhiteSpace($hostName) -or $hostName -match '[\\/]' -or
+        -not (Test-ToolkitPrinterShareName -ShareName $shareName)) {
+        Write-Host '[ERROR] Invalid host or share name.' -ForegroundColor Red
+        return
+    }
+
+    $connectionName = "\\$hostName\$shareName"
+    try {
+        Write-Host "Testing SMB connectivity to $hostName (TCP 445)..." -ForegroundColor Gray
+        $reachable = Test-NetConnection -ComputerName $hostName -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue
+        if (-not $reachable) {
+            Write-Host "[ERROR] $hostName is not reachable on TCP 445. Check routing, firewall, and that the host is online." -ForegroundColor Red
+            return
+        }
+
+        if (Get-Printer -Name $connectionName -ErrorAction SilentlyContinue) {
+            Write-Host "[INFO] Client mapping already exists: $connectionName" -ForegroundColor Yellow
+            return
+        }
+
+        Add-Printer -ConnectionName $connectionName -ErrorAction Stop
+        if (Get-Printer -Name $connectionName -ErrorAction SilentlyContinue) {
+            Write-Host "[OK] Shared printer connected: $connectionName" -ForegroundColor Green
+        } else {
+            Write-Host '[WARN] Windows accepted the request, but the printer mapping was not found during verification.' -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "[ERROR] Could not connect to ${connectionName}: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host '       If Windows blocks the driver, install the signed driver locally and retry.' -ForegroundColor Gray
+    }
+}
+
+function Test-ToolkitPrinterShareConnection {
+    $hostInput = Read-Host "Enter printer host name or IP address"
+    $hostName = $hostInput.Trim().TrimStart('\\').TrimEnd('\\')
+    $shareName = (Read-Host 'Enter printer share name (without \\)').Trim()
+    if ([string]::IsNullOrWhiteSpace($hostName) -or $hostName -match '[\\/]' -or
+        -not (Test-ToolkitPrinterShareName -ShareName $shareName)) {
+        Write-Host '[ERROR] Invalid host or share name.' -ForegroundColor Red
+        return
+    }
+
+    $connectionName = "\\$hostName\$shareName"
+    $portCheck = Test-NetConnection -ComputerName $hostName -Port 445 -WarningAction SilentlyContinue
+    $mapped = Get-Printer -Name $connectionName -ErrorAction SilentlyContinue
+    Write-Host "`nPrinter share test: $connectionName" -ForegroundColor Cyan
+    Write-Host "   TCP 445 reachable : $($portCheck.TcpTestSucceeded)" -ForegroundColor (if ($portCheck.TcpTestSucceeded) { 'Green' } else { 'Red' })
+    Write-Host "   Mapped on this PC  : $([bool]$mapped)" -ForegroundColor (if ($mapped) { 'Green' } else { 'Yellow' })
+    if (-not $portCheck.TcpTestSucceeded) {
+        Write-Host '   Check the host spooler, Windows firewall, routing, and SMB access.' -ForegroundColor Yellow
+    }
+}
+
+function Remove-ToolkitPrinterShareMapping {
+    $localPrinters = @(Get-Printer -ErrorAction SilentlyContinue)
+    Write-Host "`n[1] Unshare a local host printer" -ForegroundColor Yellow
+    Write-Host '[2] Remove a client printer mapping' -ForegroundColor Yellow
+    $removeChoice = Read-Host 'Select action (1-2)'
+
+    if ($removeChoice -eq '1') {
+        $shared = @($localPrinters | Where-Object { $_.Shared })
+        if ($shared.Count -eq 0) { Write-Host '[INFO] No shared local printers found.' -ForegroundColor Gray; return }
+        for ($i = 0; $i -lt $shared.Count; $i++) { Write-Host ("   [{0}] {1} (Share: {2})" -f ($i + 1), $shared[$i].Name, $shared[$i].ShareName) }
+        $selectionText = Read-Host "Printer number (1-$($shared.Count))"
+        try { $selection = [int]$selectionText - 1 } catch { $selection = -1 }
+        if ($selection -lt 0 -or $selection -ge $shared.Count) { Write-Host '[ERROR] Invalid selection.' -ForegroundColor Red; return }
+        $selected = $shared[$selection]
+        if ((Read-Host "Type YES to unshare '$($selected.Name)'") -cne 'YES') { Write-Host '[CANCELLED]' -ForegroundColor Yellow; return }
+        try { Set-Printer -Name $selected.Name -Shared $false -ErrorAction Stop; Write-Host "[OK] Printer '$($selected.Name)' is no longer shared." -ForegroundColor Green }
+        catch { Write-Host "[ERROR] Could not unshare printer: $($_.Exception.Message)" -ForegroundColor Red }
+    } elseif ($removeChoice -eq '2') {
+        $mapped = @($localPrinters | Where-Object { $_.Name -like '\\*' })
+        if ($mapped.Count -eq 0) { Write-Host '[INFO] No shared-printer client mappings found.' -ForegroundColor Gray; return }
+        for ($i = 0; $i -lt $mapped.Count; $i++) { Write-Host ("   [{0}] {1}" -f ($i + 1), $mapped[$i].Name) }
+        $selectionText = Read-Host "Mapping number (1-$($mapped.Count))"
+        try { $selection = [int]$selectionText - 1 } catch { $selection = -1 }
+        if ($selection -lt 0 -or $selection -ge $mapped.Count) { Write-Host '[ERROR] Invalid selection.' -ForegroundColor Red; return }
+        $selected = $mapped[$selection]
+        if ((Read-Host "Type YES to remove '$($selected.Name)'") -cne 'YES') { Write-Host '[CANCELLED]' -ForegroundColor Yellow; return }
+        try { Remove-Printer -Name $selected.Name -ErrorAction Stop; Write-Host "[OK] Client mapping removed: $($selected.Name)" -ForegroundColor Green }
+        catch { Write-Host "[ERROR] Could not remove client mapping: $($_.Exception.Message)" -ForegroundColor Red }
+    } else {
+        Write-Host '[ERROR] Invalid selection.' -ForegroundColor Red
     }
 }
 
@@ -635,12 +962,16 @@ while ($true) {
                 Write-Host "   [3] Disable SNMP Status on TCP/IP Ports (Prevent False Offline Status)"
                 Write-Host "   [4] Force Reset 'Use Printer Offline' Flag on All Printers"
                 Write-Host "   [5] Quick Add Office Network Printer (Epson Kiri/Kanan, DocuCentre)"
+                Write-Host "   [6] Share Local Printer (Host)                 (Create a protected Windows printer share)" -ForegroundColor Cyan
+                Write-Host "   [7] Connect Shared Printer (Client)            (Add \\HOST\SHARE and test SMB)" -ForegroundColor Cyan
+                Write-Host "   [8] Printer Share Status / Report              (List shares, TCP 445 test, save report)" -ForegroundColor Cyan
+                Write-Host "   [9] Remove Printer Share / Client Mapping     (Rollback a share or connection)" -ForegroundColor Yellow
                 Write-Host ""
                 Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host ""
 
-                $printChoice = Read-Host "Select option (0-5)"
+                $printChoice = Read-Host "Select option (0-9)"
                 if ($printChoice -eq "0") {
                     break
                 }
@@ -740,6 +1071,78 @@ while ($true) {
                         } else {
                             Write-Host "[ERROR] Invalid selection." -ForegroundColor Red
                         }
+                        Start-Sleep -Seconds 2
+                    }
+                    "6" {
+                        Write-Host "`n=== Share a Local Printer (Host Mode) ===" -ForegroundColor Yellow
+                        $hostPrinters = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '\\*' })
+                        if ($hostPrinters.Count -eq 0) {
+                            Write-Host '[ERROR] No local printers were found.' -ForegroundColor Red
+                            Start-Sleep -Seconds 2
+                            continue
+                        }
+                        for ($i = 0; $i -lt $hostPrinters.Count; $i++) {
+                            $shareText = if ($hostPrinters[$i].Shared) { "Shared as $($hostPrinters[$i].ShareName)" } else { 'Not shared' }
+                            Write-Host ("   [{0}] {1} ({2}, Driver: {3})" -f ($i + 1), $hostPrinters[$i].Name, $shareText, $hostPrinters[$i].DriverName)
+                        }
+                        $pIndexText = Read-Host "Printer number (1-$($hostPrinters.Count))"
+                        try { $pIdx = [int]$pIndexText - 1 } catch { $pIdx = -1 }
+                        if ($pIdx -lt 0 -or $pIdx -ge $hostPrinters.Count) {
+                            Write-Host '[ERROR] Invalid printer selection.' -ForegroundColor Red
+                            Start-Sleep -Seconds 2
+                            continue
+                        }
+
+                        $selectedPrinter = $hostPrinters[$pIdx]
+                        $defaultShare = Get-ToolkitDefaultPrinterShareName -PrinterName $selectedPrinter.Name
+                        $shareName = (Read-Host "Share name (default: $defaultShare)").Trim()
+                        if ([string]::IsNullOrWhiteSpace($shareName)) { $shareName = $defaultShare }
+                        if ((Read-Host "Type YES to share '$($selectedPrinter.Name)' as '$shareName'") -cne 'YES') {
+                            Write-Host '[CANCELLED] No changes were made.' -ForegroundColor Yellow
+                        } else {
+                            Set-ToolkitPrinterShare -PrinterName $selectedPrinter.Name -ShareName $shareName | Out-Null
+                        }
+                        Start-Sleep -Seconds 2
+                    }
+                    "7" {
+                        Write-Host "`n=== Connect to a Shared Printer (Client Mode) ===" -ForegroundColor Yellow
+                        Add-ToolkitSharedPrinterClient
+                        Start-Sleep -Seconds 2
+                    }
+                    "8" {
+                        Write-Host "`n=== Printer Share Status & Report ===" -ForegroundColor Yellow
+                        $inventory = @(Get-ToolkitPrinterInventory)
+                        if ($inventory.Count -eq 0) {
+                            Write-Host '[INFO] No printers are installed on this PC.' -ForegroundColor Gray
+                        } else {
+                            $inventory | Format-Table Name, Shared, ShareName, Driver, Port, Status -AutoSize | Out-String | Write-Host -ForegroundColor White
+                        }
+
+                        $desktopPath = [Environment]::GetFolderPath('Desktop')
+                        $reportPath = Join-Path $desktopPath "PRINTER_SHARE_REPORT_$($env:COMPUTERNAME)_$((Get-Date).ToString('yyyyMMdd_HHmmss')).txt"
+                        $ipv4 = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                            Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+                            Select-Object -ExpandProperty IPAddress)
+                        $spoolerStatus = (Get-Service -Name spooler -ErrorAction SilentlyContinue).Status
+                        @(
+                            'IT Support Toolkit - Printer Share Report'
+                            "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
+                            "Computer: $env:COMPUTERNAME"
+                            "IPv4: $($ipv4 -join ', ')"
+                            "Spooler: $spoolerStatus"
+                            ''
+                            'Printers:'
+                            ($inventory | Format-Table Name, Shared, ShareName, Driver, Port, Status -AutoSize | Out-String)
+                        ) | Set-Content -LiteralPath $reportPath -Encoding UTF8
+                        Write-Host "[OK] Report saved to $reportPath" -ForegroundColor Green
+
+                        $testNow = (Read-Host 'Test a remote printer host now? (Y/N)').Trim().ToUpperInvariant()
+                        if ($testNow -eq 'Y') { Test-ToolkitPrinterShareConnection }
+                        Start-Sleep -Seconds 2
+                    }
+                    "9" {
+                        Write-Host "`n=== Remove Printer Share / Client Mapping ===" -ForegroundColor Yellow
+                        Remove-ToolkitPrinterShareMapping
                         Start-Sleep -Seconds 2
                     }
                 }
@@ -1257,6 +1660,8 @@ while ($true) {
                 Write-Host "      [OK] Local admin account '$deployUser' already exists. Password updated." -ForegroundColor Green
             }
 
+            Set-ToolkitLocalAccountDisplayName | Out-Null
+
             # 2. Enable Firewall Rules, Services & Remote UAC (LocalAccountTokenFilterPolicy)
             reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f >$null 2>&1
             netsh advfirewall firewall set rule group="remote administration" new enable=yes >$null 2>&1
@@ -1268,61 +1673,94 @@ while ($true) {
             Start-Service -Name winmgmt -ErrorAction SilentlyContinue
             Write-Host "      [OK] WMI, RPC, Remote UAC, Remote Registry and administration rules enabled." -ForegroundColor Green
 
-            # 2. Silent Install LsAgent if present
-            $localLsAgent1 = "D:\Sharing\Software\LsAgent-windows.exe"
-            $localLsAgent2 = "C:\Program Files (x86)\Lansweeper\Client\LsAgent-windows.exe"
-            $uncLsAgent1   = $null
-            $uncLsAgent2   = $null
+            # 2. Install LsAgent using the same source selection and local staging
+            # pattern as Kaspersky: USB -> local disk -> network share by default.
+            $agentFileName = 'LsAgent-windows.exe'
+            $usbLsAgent = Find-ToolkitUsbInstaller -FileName $agentFileName
+            $localLsAgent = $null
+            foreach ($localFolder in @('D:\Sharing\Software', 'C:\Program Files (x86)\Lansweeper\Client')) {
+                $localCandidate = Join-Path $localFolder $agentFileName
+                if (Test-Path -LiteralPath $localCandidate -PathType Leaf) { $localLsAgent = $localCandidate; break }
+            }
+
+            Write-Host "`nSelect LsAgent Installer Source:" -ForegroundColor Cyan
+            Write-Host '   [1] Auto-Detect (Flash Drive -> Local Disk -> Network Share)'
+            Write-Host '   [2] Flash Drive (USB)'
+            Write-Host '   [3] Local Disk (D:\Sharing\Software)'
+            Write-Host '   [4] Network Share (\\192.168.10.160\Sharing)'
+            Write-Host '   [0] Skip LsAgent installation' -ForegroundColor Red
+            $agentSourceChoice = Read-Host 'Select source (0-4) [Default: 1]'
+            if ([string]::IsNullOrWhiteSpace($agentSourceChoice)) { $agentSourceChoice = '1' }
+            if ($agentSourceChoice -notin @('0', '1', '2', '3', '4')) {
+                Write-Host '[WARN] Invalid source choice; using Auto-Detect.' -ForegroundColor Yellow
+                $agentSourceChoice = '1'
+            }
+
             # Direct-LAN mode does not require a Cloud Relay key. If an optional
             # relay key is supplied through the environment, add it as fallback.
-            $agentArgs     = '--mode unattended --server 192.168.10.160 --port 9524'
-            $agentKey      = [Environment]::GetEnvironmentVariable('IT_TOOLKIT_LSAGENT_KEY')
+            $agentArgs = '--mode unattended --server 192.168.10.160 --port 9524'
+            $agentKey = [Environment]::GetEnvironmentVariable('IT_TOOLKIT_LSAGENT_KEY')
             if (-not [string]::IsNullOrWhiteSpace($agentKey)) {
                 $agentArgs += " --agentkey $agentKey"
                 Write-Host '      [INFO] Cloud Relay fallback enabled from IT_TOOLKIT_LSAGENT_KEY.' -ForegroundColor Gray
             }
 
-            # Check connected Flash Drives (USB)
-            $fdLsAgent = $null
-            $removableDrives = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter
-            foreach ($drive in $removableDrives) {
-                $candidate1 = "$($drive):\Software\LsAgent-windows.exe"
-                $candidate2 = "$($drive):\soft\LsAgent-windows.exe"
-                $candidate3 = "$($drive):\LsAgent-windows.exe"
-                if (Test-Path $candidate1) { $fdLsAgent = $candidate1; break }
-                if (Test-Path $candidate2) { $fdLsAgent = $candidate2; break }
-                if (Test-Path $candidate3) { $fdLsAgent = $candidate3; break }
-            }
-
-            # Connect only when no local/USB installer is available. Environment
-            # overrides take precedence over the embedded office credentials.
-            if (-not $fdLsAgent -and -not (Test-Path $localLsAgent1) -and -not (Test-Path $localLsAgent2)) {
+            $lsAgentInstaller = $null
+            $lsAgentSource = $null
+            if ($agentSourceChoice -eq '0') {
+                Write-Host '[SKIPPED] LsAgent installation skipped by request.' -ForegroundColor Yellow
+            } elseif ($agentSourceChoice -eq '2') {
+                if ($usbLsAgent) { $lsAgentInstaller = $usbLsAgent; $lsAgentSource = 'Flash Drive' }
+            } elseif ($agentSourceChoice -eq '3') {
+                if ($localLsAgent) { $lsAgentInstaller = $localLsAgent; $lsAgentSource = 'Local Disk' }
+            } elseif ($agentSourceChoice -eq '4') {
                 if (Connect-ToolkitDeploymentShare -Name 'ToolkitShare' -Root '\\192.168.10.160\Sharing') {
-                    $uncLsAgent1 = 'ToolkitShare:\Software\LsAgent-windows.exe'
+                    $networkCandidate = 'ToolkitShare:\Software\LsAgent-windows.exe'
+                    if (Test-Path -LiteralPath $networkCandidate -PathType Leaf) {
+                        $lsAgentInstaller = $networkCandidate
+                        $lsAgentSource = 'Network Share'
+                    }
                 }
-                if (Connect-ToolkitDeploymentShare -Name 'ToolkitPackage' -Root '\\192.168.10.160\DefaultPackageShare$') {
-                    $uncLsAgent2 = 'ToolkitPackage:\Installers\LsAgent-windows.exe'
+                if (-not $lsAgentInstaller -and (Connect-ToolkitDeploymentShare -Name 'ToolkitPackage' -Root '\\192.168.10.160\DefaultPackageShare$')) {
+                    $networkCandidate = 'ToolkitPackage:\Installers\LsAgent-windows.exe'
+                    if (Test-Path -LiteralPath $networkCandidate -PathType Leaf) {
+                        $lsAgentInstaller = $networkCandidate
+                        $lsAgentSource = 'Lansweeper Package Share'
+                    }
+                }
+            } else {
+                if ($usbLsAgent) { $lsAgentInstaller = $usbLsAgent; $lsAgentSource = 'Flash Drive' }
+                elseif ($localLsAgent) { $lsAgentInstaller = $localLsAgent; $lsAgentSource = 'Local Disk' }
+                else {
+                    if (Connect-ToolkitDeploymentShare -Name 'ToolkitShare' -Root '\\192.168.10.160\Sharing') {
+                        $networkCandidate = 'ToolkitShare:\Software\LsAgent-windows.exe'
+                        if (Test-Path -LiteralPath $networkCandidate -PathType Leaf) {
+                            $lsAgentInstaller = $networkCandidate
+                            $lsAgentSource = 'Network Share'
+                        }
+                    }
+                    if (-not $lsAgentInstaller -and (Connect-ToolkitDeploymentShare -Name 'ToolkitPackage' -Root '\\192.168.10.160\DefaultPackageShare$')) {
+                        $networkCandidate = 'ToolkitPackage:\Installers\LsAgent-windows.exe'
+                        if (Test-Path -LiteralPath $networkCandidate -PathType Leaf) {
+                            $lsAgentInstaller = $networkCandidate
+                            $lsAgentSource = 'Lansweeper Package Share'
+                        }
+                    }
                 }
             }
 
-            if ($fdLsAgent) {
-                Write-Host "      [Flash Drive] Found installer on USB ($fdLsAgent). Installing silently..." -ForegroundColor Gray
-                $lsVerified = Install-ToolkitAgent $fdLsAgent $agentArgs 'LansweeperAgentService'
-            } elseif (Test-Path $localLsAgent1) {
-                Write-Host "      [Local] Installing LsAgent silently..." -ForegroundColor Gray
-                $lsVerified = Install-ToolkitAgent $localLsAgent1 $agentArgs 'LansweeperAgentService'
-            } elseif (Test-Path $localLsAgent2) {
-                Write-Host "      [Local] Installing LsAgent silently..." -ForegroundColor Gray
-                $lsVerified = Install-ToolkitAgent $localLsAgent2 $agentArgs 'LansweeperAgentService'
-            } elseif ($uncLsAgent1 -and (Test-Path $uncLsAgent1)) {
-                Write-Host "      [Network Share] Installing LsAgent silently via network share..." -ForegroundColor Gray
-                $lsVerified = Install-ToolkitAgent $uncLsAgent1 $agentArgs 'LansweeperAgentService'
-            } elseif ($uncLsAgent2 -and (Test-Path $uncLsAgent2)) {
-                Write-Host "      [Network Share] Installing LsAgent silently via network share..." -ForegroundColor Gray
-                $lsVerified = Install-ToolkitAgent $uncLsAgent2 $agentArgs 'LansweeperAgentService'
-            } else {
-                Write-Host "      [INFO] LsAgent installer not found on USB or network share; firewall/RPC rules configured." -ForegroundColor Yellow
+            if ($agentSourceChoice -ne '0') {
+                if ($lsAgentInstaller) {
+                    $lsVerified = Install-ToolkitAgent -Installer $lsAgentInstaller -Arguments $agentArgs -ServiceName 'LansweeperAgentService' -SourceLabel $lsAgentSource
+                    if ($lsVerified) {
+                        Write-Host '      [NEXT] Check for this asset in Lansweeper after the next agent scan; successful service start does not prove server check-in.' -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "      [ERROR] LsAgent installer was not found for source choice $agentSourceChoice." -ForegroundColor Red
+                    Write-Host '      No installer was executed; the onboarding network settings above remain applied.' -ForegroundColor Yellow
+                }
             }
+            Remove-PSDrive -Name 'ToolkitShare', 'ToolkitPackage' -Force -ErrorAction SilentlyContinue
 
             Write-Host "`n[INFO] Onboarding steps finished. Review errors above; verify the latest check-in on the Lansweeper server." -ForegroundColor Yellow
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
@@ -1350,6 +1788,8 @@ while ($true) {
 
                 Write-Host "      [OK] Hostname set to: $cleanHostname (Description: $cleanDescription)" -ForegroundColor Green
             }
+
+            Set-ToolkitLocalAccountDisplayName | Out-Null
 
             Write-Host "`nSelect Installer Source:" -ForegroundColor Cyan
             Write-Host "   [1] Auto-Detect (Flash Drive -> Local Disk -> Network Share)"
@@ -1424,16 +1864,23 @@ while ($true) {
             $uncInstaller   = $null
             $kesArgs        = ""
 
-            # Check connected Flash Drives (USB)
+            # Search the script's USB drive first, then other removable drives.
+            # The toolkit layout is USB:\software\Install.ps1 + USB:\software\Software\installer.exe.
+            $installerName = 'Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe'
             $fdInstaller = $null
-            $removableDrives = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter
-            foreach ($drive in $removableDrives) {
-                $c1 = "$($drive):\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-                $c2 = "$($drive):\soft\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-                $c3 = "$($drive):\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
-                    if (Test-Path $c1) { $fdInstaller = $c1; break }
-                if (Test-Path $c2) { $fdInstaller = $c2; break }
-                if (Test-Path $c3) { $fdInstaller = $c3; break }
+            $usbDrives = @(Get-PSDrive -PSProvider FileSystem | Where-Object {
+                try { [System.IO.DriveInfo]::new($_.Root).DriveType -eq [System.IO.DriveType]::Removable }
+                catch { $false }
+            })
+            if ($PSScriptRoot) {
+                $usbDrives = @($usbDrives | Sort-Object @{ Expression = { if ($PSScriptRoot.StartsWith($_.Root, [System.StringComparison]::OrdinalIgnoreCase)) { 0 } else { 1 } } }, Name)
+            }
+            foreach ($drive in $usbDrives) {
+                foreach ($folder in @('software\Software', 'Software', 'software\soft', 'soft', 'software', '')) {
+                    $candidate = Join-Path (Join-Path $drive.Root $folder) $installerName
+                    if (Test-Path -LiteralPath $candidate -PathType Leaf) { $fdInstaller = $candidate; break }
+                }
+                if ($fdInstaller) { break }
             }
 
             $networkSourceNeeded = $sourceChoice -eq '4' -or
@@ -1442,127 +1889,75 @@ while ($true) {
                 $uncInstaller = 'ToolkitShare:\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe'
             }
 
-            $tempInstaller = "$env:SystemDrive\Temp\KES14_Setup.exe"
-            if (-not (Test-Path "$env:SystemDrive\Temp")) { New-Item -Path "$env:SystemDrive\Temp" -ItemType Directory -Force | Out-Null }
-
-            $targetInstallerToRun = $null
-
+            $sourceInstaller = $null
+            $sourceLabel = $null
             switch ($sourceChoice) {
-                "2" {
-                    if ($fdInstaller) {
-                        Write-Host "      [Flash Drive] Copying installer from USB to Local Disk ($tempInstaller)..." -ForegroundColor Gray
-                        Copy-Item -Path $fdInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
-                        if (Test-Path $tempInstaller) {
-                            $targetInstallerToRun = $tempInstaller
-                            Write-Host "      [OK] Copied to Local Disk. You can now safely EJECT your Flash Drive (USB)!" -ForegroundColor Green
-                        } else {
-                            $targetInstallerToRun = $fdInstaller
-                        }
-                    } else {
-                        Write-Host "      [ERROR] Installer not found on any connected Flash Drive (USB)." -ForegroundColor Red
-                    }
-                }
-                "3" {
-                    if (Test-Path $localInstaller) {
-                        if ($localInstaller -ne $tempInstaller) {
-                            Write-Host "      [Local Disk] Copying installer to Local Temp ($tempInstaller)..." -ForegroundColor Gray
-                            Copy-Item -Path $localInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
-                            if (Test-Path $tempInstaller) { $targetInstallerToRun = $tempInstaller } else { $targetInstallerToRun = $localInstaller }
-                        } else {
-                            $targetInstallerToRun = $localInstaller
-                        }
-                    } else {
-                        Write-Host "      [ERROR] Local installer not found at $localInstaller." -ForegroundColor Red
-                    }
-                }
-                "4" {
-                    if (Test-Path $uncInstaller) {
-                        Write-Host "      [Network Share] Copying installer from Network Share to Local Disk ($tempInstaller)..." -ForegroundColor Gray
-                        $copySuccess = $false
-                        try {
-                            if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
-                                Start-BitsTransfer -Source $uncInstaller -Destination $tempInstaller -ErrorAction Stop
-                                $copySuccess = $true
-                            }
-                        } catch { $copySuccess = $false }
-
-                        if (-not $copySuccess) {
-                            try {
-                                Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
-                                $copySuccess = $true
-                            } catch { Write-Host "      [WARN] Standard copy failed: $_" -ForegroundColor Red }
-                        }
-
-                        if (Test-Path $tempInstaller) {
-                            $targetInstallerToRun = $tempInstaller
-                            Write-Host "      [OK] Copied to Local Disk successfully." -ForegroundColor Green
-                        } else {
-                            $targetInstallerToRun = $uncInstaller
-                        }
-                    } else {
-                        Write-Host "      [ERROR] Network share installer not found at $uncInstaller." -ForegroundColor Red
-                    }
-                }
+                '2' { $sourceInstaller = $fdInstaller; $sourceLabel = 'USB' }
+                '3' { if (Test-Path -LiteralPath $localInstaller -PathType Leaf) { $sourceInstaller = $localInstaller }; $sourceLabel = 'Local Disk' }
+                '4' { if ($uncInstaller -and (Test-Path -LiteralPath $uncInstaller -PathType Leaf)) { $sourceInstaller = $uncInstaller }; $sourceLabel = 'Network Share' }
                 default {
-                    # Auto-Detect mode
-                    if ($fdInstaller) {
-                        Write-Host "      [Auto-Detect: USB] Copying installer from USB to Local Disk ($tempInstaller)..." -ForegroundColor Gray
-                        Copy-Item -Path $fdInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
-                        if (Test-Path $tempInstaller) {
-                            $targetInstallerToRun = $tempInstaller
-                            Write-Host "      [OK] Copied to Local Disk. You can now safely EJECT your Flash Drive (USB)!" -ForegroundColor Green
-                        } else {
-                            $targetInstallerToRun = $fdInstaller
-                        }
-                    } elseif (Test-Path $localInstaller) {
-                        Write-Host "      [Auto-Detect: Local] Copying installer to Local Temp ($tempInstaller)..." -ForegroundColor Gray
-                        Copy-Item -Path $localInstaller -Destination $tempInstaller -Force -ErrorAction SilentlyContinue
-                        if (Test-Path $tempInstaller) { $targetInstallerToRun = $tempInstaller } else { $targetInstallerToRun = $localInstaller }
-                    } elseif (Test-Path $uncInstaller) {
-                        Write-Host "      [Auto-Detect: Network Share] Copying installer to Local Disk ($tempInstaller)..." -ForegroundColor Gray
-                        $copySuccess = $false
-                        try {
-                            if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
-                                Start-BitsTransfer -Source $uncInstaller -Destination $tempInstaller -ErrorAction Stop
-                                $copySuccess = $true
-                            }
-                        } catch { $copySuccess = $false }
-
-                        if (-not $copySuccess) {
-                            try {
-                                Copy-Item -Path $uncInstaller -Destination $tempInstaller -Force -ErrorAction Stop
-                                $copySuccess = $true
-                            } catch {}
-                        }
-
-                        if (Test-Path $tempInstaller) {
-                            $targetInstallerToRun = $tempInstaller
-                            Write-Host "      [OK] Copied to Local Disk successfully." -ForegroundColor Green
-                        } else {
-                            $targetInstallerToRun = $uncInstaller
-                        }
-                    }
+                    if ($fdInstaller) { $sourceInstaller = $fdInstaller; $sourceLabel = 'USB' }
+                    elseif (Test-Path -LiteralPath $localInstaller -PathType Leaf) { $sourceInstaller = $localInstaller; $sourceLabel = 'Local Disk' }
+                    elseif ($uncInstaller -and (Test-Path -LiteralPath $uncInstaller -PathType Leaf)) { $sourceInstaller = $uncInstaller; $sourceLabel = 'Network Share' }
                 }
             }
 
-            if ($targetInstallerToRun -and (Test-Path $targetInstallerToRun)) {
-                Write-Host "      [Executing] Launching Kaspersky installer from Local Disk ($targetInstallerToRun)..." -ForegroundColor Yellow
-                $proc = Start-Process -FilePath $targetInstallerToRun -Wait -PassThru
-                if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                    Write-Host "      [OK] Kaspersky Endpoint Security installed successfully." -ForegroundColor Green
-                } else {
-                    Write-Host "      [ERROR] Kaspersky installation finished or closed (ExitCode: $($proc.ExitCode))." -ForegroundColor Red
-                }
-                
-                # Cleanup local temp installer after execution finishes
-                if ($targetInstallerToRun -eq $tempInstaller) {
-                    Remove-Item -Path $tempInstaller -Force -ErrorAction SilentlyContinue
+            $tempInstaller = Join-Path "$env:SystemDrive\Temp" "KES14_Setup_$PID.exe"
+            $partialInstaller = "$tempInstaller.partial"
+            $targetInstallerToRun = $null
+            $installSucceeded = $false
+            if ($sourceInstaller) {
+                try {
+                    New-Item -Path (Split-Path $tempInstaller -Parent) -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                    $sourceFile = Get-Item -LiteralPath $sourceInstaller -ErrorAction Stop
+                    Write-Host "      [$sourceLabel] Copying installer to $tempInstaller ..." -ForegroundColor Gray
+                    Copy-Item -LiteralPath $sourceInstaller -Destination $partialInstaller -Force -ErrorAction Stop
+                    $copiedFile = Get-Item -LiteralPath $partialInstaller -ErrorAction Stop
+                    if ($copiedFile.Length -ne $sourceFile.Length -or
+                        (Get-FileHash -LiteralPath $sourceInstaller -Algorithm SHA256 -ErrorAction Stop).Hash -ne
+                        (Get-FileHash -LiteralPath $partialInstaller -Algorithm SHA256 -ErrorAction Stop).Hash) {
+                        throw 'The copied installer does not match the source file.'
+                    }
+                    Move-Item -LiteralPath $partialInstaller -Destination $tempInstaller -ErrorAction Stop
+                    $targetInstallerToRun = $tempInstaller
+                    Write-Host '      [OK] Installer copied and verified. USB can now be ejected.' -ForegroundColor Green
+                } catch {
+                    Write-Host "      [ERROR] Installer copy/verification failed: $($_.Exception.Message)" -ForegroundColor Red
+                    Remove-Item -LiteralPath $partialInstaller -Force -ErrorAction SilentlyContinue
                 }
             } else {
-                Write-Host "      [ERROR] Unable to locate or prepare Kaspersky installer." -ForegroundColor Red
+                Write-Host "      [ERROR] Kaspersky installer not found for source choice $sourceChoice." -ForegroundColor Red
             }
 
-            Write-Host "`n[OK] Kaspersky task completed." -ForegroundColor Green
+            if ($targetInstallerToRun) {
+                try {
+                    Write-Host "      [Executing] Launching Kaspersky installer from $targetInstallerToRun ..." -ForegroundColor Yellow
+                    $installStartedAt = Get-Date
+                    $proc = Start-Process -FilePath $targetInstallerToRun -Wait -PassThru -ErrorAction Stop
+                    if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                        $installSucceeded = $true
+                        Write-Host "      [OK] Kaspersky installer completed (ExitCode: $($proc.ExitCode))." -ForegroundColor Green
+                        Remove-Item -LiteralPath $tempInstaller -Force -ErrorAction SilentlyContinue
+                    } else {
+                        Write-Host "      [ERROR] Kaspersky installer exited with code $($proc.ExitCode). Installer retained at $tempInstaller for diagnosis." -ForegroundColor Red
+                        $packageLog = Join-Path $env:TEMP 'klpkinst.log'
+                        if ($proc.ExitCode -eq 4 -and (Test-Path -LiteralPath $packageLog -PathType Leaf) -and
+                            (Get-Item -LiteralPath $packageLog).LastWriteTime -ge $installStartedAt.AddSeconds(-5) -and
+                            (Select-String -LiteralPath $packageLog -SimpleMatch 'Bad parameter "VerifyCertDate"' -Quiet)) {
+                            Write-Host '      [CAUSE] The stand-alone package certificate is out of date (VerifyCertDate).' -ForegroundColor Red
+                            Write-Host '      [ACTION] Regenerate and download a fresh installation package from your Kaspersky console, then replace the old EXE on USB.' -ForegroundColor Yellow
+                        }
+                        if (Test-Path -LiteralPath $packageLog -PathType Leaf) {
+                            Write-Host "      [LOG] $packageLog" -ForegroundColor Gray
+                        }
+                    }
+                } catch {
+                    Write-Host "      [ERROR] Kaspersky installer could not start: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host "      Installer retained at $tempInstaller for diagnosis." -ForegroundColor Yellow
+                }
+            }
+
+            if (-not $installSucceeded) { Write-Host "`n[ERROR] Kaspersky task did not complete successfully." -ForegroundColor Red }
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
         }

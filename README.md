@@ -40,6 +40,11 @@ irm https://raw.githubusercontent.com/Bersa96/-it-toolkit/main/Install.ps1 | iex
 * **Fix Printer Offline (WSD to TCP/IP Port Converter)**: Resolves sleep/disconnect issues on network printers by converting WSD ports to Standard TCP/IP (RAW 9100).
 * **Disable SNMP Status**: Prevents false offline status triggers on standard TCP/IP ports.
 * **Quick Network Printer Setup**: Pre-configured setup for office printers.
+* **Printer Sharing Host Mode**: Shares one selected local printer with a unique Windows share name, verifies the spooler, and enables File and Printer Sharing firewall rules on Domain/Private profiles.
+* **Printer Sharing Client Mode**: Tests TCP 445, connects to a host printer using `\\HOST\SHARE`, and verifies the local mapping.
+* **Printer Share Diagnostics & Rollback**: Lists local/shared printers, writes a Desktop report, and safely unshares a host printer or removes a client mapping.
+
+Printer sharing uses the host's stable DNS name or DHCP-reserved IP. Same-subnet clients can connect directly; routed clients additionally need TCP 445/RPC permitted between the relevant networks. The toolkit does not store printer credentials or grant anonymous folder access.
 
 ---
 
