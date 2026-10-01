@@ -12,7 +12,15 @@ Run the following command in **PowerShell (Run as Administrator)** on the target
 irm https://raw.githubusercontent.com/Bersa96/-it-toolkit/main/Install.ps1 | iex
 ```
 
-> **Offline Usage via USB**: Run `_START_MENU_IT.bat` or `_RUN_TOOLKIT.bat` directly from your flash drive with automatic administrative elevation and policy bypass.
+For offline use, open PowerShell as Administrator and run the actual script path, for example:
+
+```powershell
+& 'D:\Sharing\Script\Install.ps1'
+# USB example: replace U: and the folder with your actual location
+& 'U:\software\Install.ps1'
+```
+
+Batch launchers are not included in this repository. If execution policy blocks the script, follow your organization's approved policy; do not disable it globally.
 
 ---
 
@@ -23,14 +31,15 @@ irm https://raw.githubusercontent.com/Bersa96/-it-toolkit/main/Install.ps1 | iex
 #### 1. Standard App Deployment (Offline-First Priority)
 * Automated deployment with 3-tier fallback: **Flash Drive / Local Storage -> Winget -> Direct Vendor Download**.
 * Software supported: Google Chrome, Adobe Acrobat Reader, PDF24 Creator, WhatsApp Desktop, 7-Zip, VLC Media Player, AnyDesk, Zoom, Notion.
+* Offline and downloaded installers must return 0 (completed) or 3010 (restart required). Failed downloads/installations are reported per application; a failed installer is retained for diagnosis. Installer success is not an independent application health check.
 
 #### 2. Performance & Low-End Tuning ("Potato PC" Optimizer)
-* **Smart Auto-Boost**: Automatically detects storage type (NVMe/SATA SSD vs Mechanical HDD) and installed RAM capacity.
-* **HDD 100% Disk Fix**: Disables SysMain (SuperFetch), Windows Search aggressive indexing, Prefetcher, and background telemetry.
-* **SSD Health & TRIM Tune**: Verifies and triggers live volume `Re-Trim`, disables unnecessary defragmentation.
-* **Low RAM / Memory Saver**: Strips heavy acrylic/mica animations while keeping fonts crisp, disables Microsoft Edge startup boost/background extension preload (saves 400MB+ RAM).
-* **Safe AppX Bloatware Purge**: Cleans pre-installed promotional apps/games (Candy Crush, Disney, TikTok, Cortana, etc.) without breaking Store, Calculator, Photos, or Notepad.
-* **Rollback / Restore Default**: Reverts all performance and visual settings to factory defaults.
+* **Conservative Smart Profile**: Disables Edge startup/background operation, adding reduced animations only when detected RAM is <=8 GB. Storage detection uses NVMe or matched physical-disk metadata; unknown storage never triggers an HDD profile.
+* **Volume Analysis / Optimization**: Read-only analysis or explicitly confirmed native Windows media-aware optimization. Does not disable SysMain, Prefetch, Search, or scheduled drive optimization.
+* **Memory / Visual / Explorer Profiles**: Separate, previewed changes with explicit YES confirmation and read-back verification. Pagefile, telemetry and GameDVR remain unchanged. No fixed RAM-saving claim; benefits depend on workload.
+* **Optional App Removal**: Previews a narrow games/news/weather list and requires REMOVE. Current-user packages only; no other-user or provisioned-package removal. Reinstall via Store if needed; tuning rollback does not restore removed apps.
+* **Saved-State Rollback**: Original registry values/types are saved before changes in `%ProgramData%\ITToolkit\Performance\settings-<user SID>.xml`. Restore uses that baseline, not guessed defaults. It cannot reconstruct settings modified by older toolkit versions. Existing baseline values are retained across runs.
+* Per-user changes apply to the account running the elevated toolkit. Machine-wide Edge policies can affect all users and stop background web apps/notifications. Explorer is not forcibly restarted; sign out/in when convenient.
 
 #### 3. System Integrity Repair
 * Automated execution of DISM image servicing (`/Cleanup-Image /RestoreHealth`) followed by System File Checker (`sfc /scannow`).
@@ -43,6 +52,8 @@ irm https://raw.githubusercontent.com/Bersa96/-it-toolkit/main/Install.ps1 | iex
 * **Printer Sharing Host Mode**: Shares one selected local printer with a unique Windows share name, verifies the spooler, and enables File and Printer Sharing firewall rules on Domain/Private profiles.
 * **Printer Sharing Client Mode**: Tests TCP 445, connects to a host printer using `\\HOST\SHARE`, and verifies the local mapping.
 * **Printer Share Diagnostics & Rollback**: Lists local/shared printers, writes a Desktop report, and safely unshares a host printer or removes a client mapping.
+* **Connection Diagnosis and Guided Repair**: Main menu [4], submenu [10], or offered after a failed [7] connection. Captures the complete error, exception HRESULT and native code when available; checks DNS, TCP 445/135, local spooler and installed drivers. Saves a report in Windows Temp. TCP success is not proof that a share or print job works.
+* Repair choices open the host login, Credential Manager or driver management; optionally start a stopped local spooler, inspect remote printer shares, or retry Connect with mapping verification. No automatic credential deletion, queue purge, host configuration, SMB1 enablement, or firewall/Point and Print weakening. Remote inventory requires suitable RPC access/permissions. Per-user mapping belongs to the account running the toolkit; finish with a Test Page under the intended user.
 
 Printer sharing uses the host's stable DNS name or DHCP-reserved IP. Same-subnet clients can connect directly; routed clients additionally need TCP 445/RPC permitted between the relevant networks. The toolkit does not store printer credentials or grant anonymous folder access.
 
@@ -68,8 +79,10 @@ Printer sharing uses the host's stable DNS name or DHCP-reserved IP. Same-subnet
 * Silently installs `LsAgent` from USB, local storage, or network share.
 
 #### 8. Kaspersky Endpoint Deployment
-* Interactive installation wizard with automatic cleanup of conflicting antivirus remnants (360 Total Security, AVG, Avast, Smadav, McAfee, Norton, Bitdefender, Malwarebytes).
-* Cleans legacy SecurityCenter2 WMI provider registrations.
+* Copies the installer to local temporary storage and verifies size and SHA-256 before launch, allowing USB removal after verification.
+* Uses the legacy third-party antivirus cleanup: stops/deletes matching services and removes non-Defender/non-Kaspersky Security Center registrations and listed vendor registry keys before installer staging.
+* WARNING: this is not a complete antivirus uninstall. Drivers may remain, and existing protection can be damaged even when Kaspersky installation fails or its installer is missing. Use only on deployment machines with explicit authorization.
+* Failed installers remain available for diagnosis. Exit code 3010 is explicitly reported as requiring a restart, not fully ready protection.
 
 ---
 

@@ -37,6 +37,159 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit
 }
 
+function Get-ToolkitPerformanceHardware {
+    $drive = $env:SystemDrive.TrimEnd(':')
+    $media = 'Unknown'
+    $bus = 'Unknown'
+    try {
+        $disk = Get-Partition -DriveLetter $drive -ErrorAction Stop | Get-Disk -ErrorAction Stop
+        $bus = [string]$disk.BusType
+        if ($bus -eq 'NVMe') { $media = 'SSD' }
+        else {
+            # Match by storage association; never assume disk numbers equal PhysicalDisk DeviceId.
+            $physical = @(Get-PhysicalDisk -ErrorAction Stop | Where-Object {
+                ($_.UniqueId -and $_.UniqueId -eq $disk.UniqueId) -or
+                ($_.SerialNumber -and $disk.SerialNumber -and $_.SerialNumber.Trim() -eq $disk.SerialNumber.Trim())
+            })
+            if ($physical.Count -eq 1 -and [string]$physical[0].MediaType -in @('SSD','HDD')) {
+                $media = [string]$physical[0].MediaType
+            }
+        }
+    } catch { Write-Host '[WARN] Storage type unavailable; no HDD/SSD assumptions will be made.' -ForegroundColor Yellow }
+    $ram = $null
+    try { $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1GB, 1) } catch {}
+    [pscustomobject]@{ Drive = $drive; Media = $media; Bus = $bus; RAMGB = $ram }
+}
+
+function Invoke-ToolkitPerformanceProfile {
+    param([string]$Profile)
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $backupDir = Join-Path $env:ProgramData 'ITToolkit\Performance'
+    $backupFile = Join-Path $backupDir "settings-$sid.xml"
+    $specs = @(
+        @{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge'; Name='StartupBoostEnabled'; Kind='DWord'; Value=0; Group='Memory' },
+        @{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge'; Name='BackgroundModeEnabled'; Kind='DWord'; Value=0; Group='Memory' },
+        @{ Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'; Name='EnableTransparency'; Kind='DWord'; Value=0; Group='Visual' },
+        @{ Path='HKCU:\Control Panel\Desktop\WindowMetrics'; Name='MinAnimate'; Kind='String'; Value='0'; Group='Visual' },
+        @{ Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name='TaskbarAnimations'; Kind='DWord'; Value=0; Group='Visual' },
+        @{ Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name='HideFileExt'; Kind='DWord'; Value=0; Group='UI' },
+        @{ Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name='LaunchTo'; Kind='DWord'; Value=1; Group='UI' }
+    )
+    $state = @()
+    if (Test-Path -LiteralPath $backupFile) { $state = @(Import-Clixml -LiteralPath $backupFile -ErrorAction Stop) }
+    if ($Profile -eq 'Restore') {
+        if (-not $state.Count) { throw 'No saved tuning baseline exists for this user. Legacy tuning cannot be reconstructed automatically.' }
+        $restoreFailed = $false
+        foreach ($entry in $state) {
+            try {
+                if ($entry.Exists) {
+                    New-Item -Path $entry.Path -Force -ErrorAction Stop | Out-Null
+                    New-ItemProperty -Path $entry.Path -Name $entry.Name -Value $entry.Value -PropertyType $entry.Kind -Force -ErrorAction Stop | Out-Null
+                } elseif (Test-Path -LiteralPath $entry.Path) {
+                    $key = Get-Item -LiteralPath $entry.Path -ErrorAction Stop
+                    if ($key.GetValueNames() -contains $entry.Name) { Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction Stop }
+                }
+            } catch { $restoreFailed = $true; Write-Host "[ERROR] Restore $($entry.Name): $_" -ForegroundColor Red }
+        }
+        if ($restoreFailed) { throw 'Rollback incomplete; baseline retained so you can retry.' }
+        # Keep the immutable baseline for subsequent verification/retry.
+        Write-Host "[OK] Saved settings restored. Baseline: $backupFile" -ForegroundColor Green
+        return
+    }
+    $hw = Get-ToolkitPerformanceHardware
+    $groups = switch ($Profile) {
+        'Smart' { 'Memory'; if ($null -ne $hw.RAMGB -and $hw.RAMGB -le 8) { 'Visual' } }
+        'Memory' { 'Memory' }
+        'Visual' { 'Visual' }
+        'UI' { 'UI' }
+        default { throw 'Unknown tuning profile.' }
+    }
+    $changes = @($specs | Where-Object { $_.Group -in $groups })
+    Write-Host 'Pagefile, SysMain, Prefetch, telemetry, GameDVR and Windows drive optimization schedules are left unchanged.'
+    Write-Host 'Memory profile disables Edge background operation; background browser apps/notifications may stop. HKCU changes apply to the account running this elevated toolkit.' -ForegroundColor Yellow
+    $changes | ForEach-Object { Write-Host "  $($_.Path) / $($_.Name) = $($_.Value)" }
+    if ((Read-Host 'Apply these changes? Type YES') -cne 'YES') { Write-Host '[CANCELLED]'; return }
+    # Persist every original value before any registry mutation; never overwrite a previous baseline.
+    foreach ($spec in $changes) {
+        if (@($state | Where-Object { $_.Path -eq $spec.Path -and $_.Name -eq $spec.Name }).Count) { continue }
+        $key = Get-Item -LiteralPath $spec.Path -ErrorAction SilentlyContinue
+        $exists = $key -and ($key.GetValueNames() -contains $spec.Name)
+        $state += [pscustomobject]@{
+            Path=$spec.Path; Name=$spec.Name; Exists=[bool]$exists
+            Kind=$(if ($exists) { [string]$key.GetValueKind($spec.Name) } else { $spec.Kind })
+            Value=$(if ($exists) { $key.GetValue($spec.Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } else { $null })
+        }
+    }
+    New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null
+    $pending = "$backupFile.$([guid]::NewGuid().ToString('N')).tmp"
+    $state | Export-Clixml -LiteralPath $pending -ErrorAction Stop
+    Move-Item -LiteralPath $pending -Destination $backupFile -Force -ErrorAction Stop
+    $failed = $false
+    foreach ($spec in $changes) {
+        try {
+            New-Item -Path $spec.Path -Force -ErrorAction Stop | Out-Null
+            New-ItemProperty -Path $spec.Path -Name $spec.Name -Value $spec.Value -PropertyType $spec.Kind -Force -ErrorAction Stop | Out-Null
+            if ((Get-ItemPropertyValue -LiteralPath $spec.Path -Name $spec.Name -ErrorAction Stop) -ne $spec.Value) { throw 'Verification mismatch.' }
+            Write-Host "[OK] $($spec.Name) verified." -ForegroundColor Green
+        } catch { $failed = $true; Write-Host "[ERROR] $($spec.Name): $_" -ForegroundColor Red }
+    }
+    if ($failed) { throw "Some changes failed; use Restore saved settings. Baseline: $backupFile" }
+    Write-Host "[OK] Profile verified. Baseline: $backupFile. Sign out/in when convenient; Explorer is not forcibly terminated." -ForegroundColor Green
+}
+
+function Show-ToolkitPerformanceMenu {
+    while ($true) {
+        $hw = Get-ToolkitPerformanceHardware
+        Write-Host "`nPERFORMANCE: System drive $($hw.Drive): | $($hw.Media) / $($hw.Bus) | RAM $($hw.RAMGB) GB" -ForegroundColor Cyan
+        Write-Host '[1] Conservative Smart profile (Edge background; animations only at <=8GB RAM)'
+        Write-Host '[2] Analyze system volume (read-only; no forced HDD service changes)'
+        Write-Host '[3] Optimize system volume using Windows media-aware defaults'
+        Write-Host '[4] Memory profile (Edge background only; pagefile unchanged)'
+        Write-Host '[5] Reduce UI animations and transparency'
+        Write-Host '[6] Explorer preferences (extensions and This PC)'
+        Write-Host '[7] Preview optional apps for removal (current user only)'
+        Write-Host '[8] Restore saved tuning settings (not legacy settings/app removals)'
+        Write-Host '[0] Back'
+        $choice = Read-Host 'Select 0-8'
+        if ($choice -eq '0') { return }
+        try {
+            switch ($choice) {
+                '1' { Invoke-ToolkitPerformanceProfile 'Smart' }
+                '2' { Optimize-Volume -DriveLetter $hw.Drive -Analyze -Verbose -ErrorAction Stop }
+                '3' {
+                    if ((Read-Host 'Run Windows volume optimization now? May create disk load. Type YES') -ceq 'YES') {
+                        Optimize-Volume -DriveLetter $hw.Drive -Verbose -ErrorAction Stop
+                        Write-Host '[OK] Windows volume optimization completed.' -ForegroundColor Green
+                    }
+                }
+                '4' { Invoke-ToolkitPerformanceProfile 'Memory' }
+                '5' { Invoke-ToolkitPerformanceProfile 'Visual' }
+                '6' { Invoke-ToolkitPerformanceProfile 'UI' }
+                '7' {
+                    $candidates = @(Get-AppxPackage -ErrorAction Stop | Where-Object {
+                        $_.Name -match '^(king\.com\.(CandyCrush.*|BubbleWitch.*|FarmHeroes.*)|Microsoft\.BingNews|Microsoft\.BingWeather)$'
+                    })
+                    if (-not $candidates.Count) { Write-Host '[INFO] No optional apps found.'; break }
+                    $candidates | ForEach-Object { Write-Host "  $($_.Name)" }
+                    Write-Host 'Removes these apps for the current user only, not provisioned packages or other users. NOT reversible by tuning rollback; reinstall from Store if needed.' -ForegroundColor Yellow
+                    if ((Read-Host 'Remove exactly this list? Type REMOVE') -ceq 'REMOVE') {
+                        foreach ($app in $candidates) {
+                            try {
+                                Remove-AppxPackage -Package $app.PackageFullName -ErrorAction Stop
+                                if (Get-AppxPackage -Name $app.Name -ErrorAction Stop) { throw 'Package still present.' }
+                                Write-Host "[OK] Removed $($app.Name)" -ForegroundColor Green
+                            } catch { Write-Host "[ERROR] Removal $($app.Name): $_" -ForegroundColor Red }
+                        }
+                    }
+                }
+                '8' { Invoke-ToolkitPerformanceProfile 'Restore' }
+                default { Write-Host '[WARN] Invalid selection.' -ForegroundColor Yellow }
+            }
+        } catch { Write-Host "[ERROR] Tuning incomplete: $_" -ForegroundColor Red }
+        Read-Host 'Press Enter to continue' | Out-Null
+    }
+}
+
 function Get-ToolkitPhysicalAdapters {
     @(
         Get-NetAdapter -ErrorAction SilentlyContinue |
@@ -376,6 +529,95 @@ function Set-ToolkitPrinterShare {
     }
 }
 
+function Invoke-ToolkitPrinterConnectionDiagnostic {
+    param([string]$HostName, [string]$ShareName, [System.Management.Automation.ErrorRecord]$ConnectionError)
+    if (-not $HostName) { $HostName = (Read-Host 'Nama atau IP PC host').Trim().Trim('\') }
+    if (-not $ShareName) { $ShareName = (Read-Host 'Nama share printer').Trim() }
+    if ($HostName -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*$' -or -not (Test-ToolkitPrinterShareName $ShareName)) {
+        Write-Host '[ERROR] Nama host/share tidak valid.' -ForegroundColor Red; return
+    }
+    $connection = "\\$HostName\$ShareName"
+    $report = [Collections.Generic.List[string]]::new()
+    $report.Add("Printer diagnostic: $connection")
+    $report.Add("Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')")
+    $report.Add("Client: $env:COMPUTERNAME; user: $env:USERDOMAIN\$env:USERNAME")
+    if ($ConnectionError) {
+        $hex = '0x{0:X8}' -f ($ConnectionError.Exception.HResult -band 0xFFFFFFFFL)
+        $report.Add("Connection error: $($ConnectionError.Exception.Message)")
+        $report.Add("Exception HRESULT: $hex; ID: $($ConnectionError.FullyQualifiedErrorId)")
+        if ($ConnectionError.Exception.PSObject.Properties['NativeErrorCode']) {
+            $report.Add("Native error: $($ConnectionError.Exception.NativeErrorCode)")
+        }
+        $report.Add('HRESULT identifies the exception; it may differ from the underlying printer error. Keep the full message.')
+    }
+    try {
+        $ips = @([Net.Dns]::GetHostAddresses($HostName) | ForEach-Object { $_.IPAddressToString })
+        $report.Add("Resolved addresses: $($ips -join ', ')")
+    } catch { $report.Add("Name resolution failed: $($_.Exception.Message)") }
+    foreach ($port in @(445,135)) {
+        try {
+            $ok = Test-NetConnection -ComputerName $HostName -Port $port -InformationLevel Quiet -WarningAction SilentlyContinue -ErrorAction Stop
+            $report.Add("TCP ${port}: $ok")
+        } catch { $report.Add("TCP ${port}: check failed: $($_.Exception.Message)") }
+    }
+    try { $report.Add("Local Print Spooler: $((Get-Service spooler -ErrorAction Stop).Status)") }
+    catch { $report.Add("Local spooler check failed: $($_.Exception.Message)") }
+    try {
+        $drivers = @(Get-PrinterDriver -ErrorAction Stop | Select-Object -ExpandProperty Name)
+        $report.Add("Local drivers: $($drivers -join '; ')")
+        $report.Add("Client mapping present: $([bool](Get-Printer -Name $connection -ErrorAction SilentlyContinue))")
+    } catch { $report.Add("Local printer inventory failed: $($_.Exception.Message)") }
+    $report | ForEach-Object { Write-Host $_ }
+    Write-Host 'TCP 445 hanya tes SMB; share, login, driver dan hasil cetak belum terbukti. TCP 135 juga belum menguji port RPC dinamis.' -ForegroundColor Yellow
+    Write-Host 'Login berulang/Access denied: gunakan HOST\akun yang ada di host. Driver diblokir: pasang driver resmi dengan izin admin. Host tidak ditemukan: cek DNS/IP dan routing.'
+    Write-Host 'Jika SMB terbuka tetapi Connect gagal, cek spooler host, nama share, driver dan RPC/firewall host. Jangan aktifkan SMB1 atau matikan firewall/Point and Print.'
+    $reportPath = Join-Path ([IO.Path]::GetTempPath()) "PrinterDiagnostic-$([guid]::NewGuid().ToString('N')).txt"
+    try { $report | Set-Content -LiteralPath $reportPath -Encoding UTF8 -ErrorAction Stop; Write-Host "[REPORT] $reportPath" }
+    catch { Write-Host "[WARN] Laporan tidak tersimpan: $_" -ForegroundColor Yellow }
+    while ($true) {
+        Write-Host "`n[1] Buka host untuk login  [2] Buka Credential Manager  [3] Start spooler lokal jika berhenti"
+        Write-Host '[4] Cek daftar share printer di host  [5] Buka pengelolaan driver lokal  [6] Coba Connect lagi  [0] Kembali'
+        $action = Read-Host 'Pilih tindakan (tidak ada perbaikan otomatis tanpa pilihan Anda)'
+        try {
+            switch ($action) {
+                '0' { return }
+                '1' { Start-Process explorer.exe -ArgumentList "`"\\$HostName`"" -ErrorAction Stop; Write-Host 'Login memakai akun host. Setelah berhasil, pilih [6].' }
+                '2' { Start-Process control.exe -ArgumentList '/name Microsoft.CredentialManager' -ErrorAction Stop; Write-Host 'Periksa hanya entri host/IP tujuan yang salah; jangan hapus seluruh kredensial atau sesi SMB.' }
+                '3' {
+                    $svc = Get-Service spooler -ErrorAction Stop
+                    if ($svc.Status -eq 'Running') { Write-Host '[INFO] Spooler lokal sudah berjalan.' }
+                    elseif ((Read-Host 'Start spooler lokal? Tidak menghapus antrean. Ketik YES') -ceq 'YES') {
+                        Start-Service spooler -ErrorAction Stop
+                        $svc.WaitForStatus('Running',[TimeSpan]::FromSeconds(15))
+                        Write-Host '[OK] Spooler lokal berjalan. Spooler host tetap perlu dicek di host.' -ForegroundColor Green
+                    }
+                }
+                '4' {
+                    Write-Host 'Memeriksa host lewat RPC; butuh akses yang sesuai. Gagal membaca daftar bukan bukti share tidak ada.'
+                    $shares = @(Get-Printer -ComputerName $HostName -ErrorAction Stop | Where-Object { $_.Shared })
+                    $shares | Format-Table Name,ShareName,DriverName -AutoSize | Out-String | Write-Host
+                    if (@($shares | Where-Object { $_.ShareName -eq $ShareName }).Count -eq 0) { Write-Host '[WARN] Share tidak ada di hasil daftar ini. Periksa namanya di host.' -ForegroundColor Yellow }
+                }
+                '5' { Start-Process rundll32.exe -ArgumentList 'printui.dll,PrintUIEntry /s /t2' -ErrorAction Stop; Write-Host 'Gunakan driver resmi sesuai model dan arsitektur Windows; pemasangan mungkin perlu admin.' }
+                '6' {
+                    if (Get-Printer -Name $connection -ErrorAction SilentlyContinue) {
+                        Write-Host '[INFO] Mapping sudah ada. Uji Test Page; jangan menghapusnya otomatis.'; return
+                    }
+                    Add-Printer -ConnectionName $connection -ErrorAction Stop
+                    if (-not (Get-Printer -Name $connection -ErrorAction SilentlyContinue)) { throw 'Mapping belum terverifikasi setelah Add-Printer.' }
+                    Write-Host "[OK] Terhubung: $connection. Lanjutkan Print Test Page dan tes dari aplikasi kerja." -ForegroundColor Green
+                    return
+                }
+                default { Write-Host '[WARN] Pilihan tidak valid.' }
+            }
+        } catch {
+            $details = "Action $action failed: $($_.Exception.Message); HRESULT: $('0x{0:X8}' -f ($_.Exception.HResult -band 0xFFFFFFFFL)); ID: $($_.FullyQualifiedErrorId)"
+            Write-Host "[ERROR] $details" -ForegroundColor Red
+            try { Add-Content -LiteralPath $reportPath -Value $details -Encoding UTF8 -ErrorAction Stop } catch {}
+        }
+    }
+}
+
 function Add-ToolkitSharedPrinterClient {
     $hostInput = Read-Host "Enter printer host name or IP address (e.g. 192.168.10.160)"
     $hostName = $hostInput.Trim().TrimStart('\\').TrimEnd('\\')
@@ -393,6 +635,7 @@ function Add-ToolkitSharedPrinterClient {
         $reachable = Test-NetConnection -ComputerName $hostName -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue
         if (-not $reachable) {
             Write-Host "[ERROR] $hostName is not reachable on TCP 445. Check routing, firewall, and that the host is online." -ForegroundColor Red
+            if ((Read-Host 'Jalankan diagnosis koneksi? (Y/N)') -match '^[Yy]$') { Invoke-ToolkitPrinterConnectionDiagnostic -HostName $hostName -ShareName $shareName }
             return
         }
 
@@ -406,10 +649,15 @@ function Add-ToolkitSharedPrinterClient {
             Write-Host "[OK] Shared printer connected: $connectionName" -ForegroundColor Green
         } else {
             Write-Host '[WARN] Windows accepted the request, but the printer mapping was not found during verification.' -ForegroundColor Yellow
+            if ((Read-Host 'Jalankan diagnosis koneksi? (Y/N)') -match '^[Yy]$') { Invoke-ToolkitPrinterConnectionDiagnostic -HostName $hostName -ShareName $shareName }
         }
     } catch {
         Write-Host "[ERROR] Could not connect to ${connectionName}: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host '       If Windows blocks the driver, install the signed driver locally and retry.' -ForegroundColor Gray
+        $connectError = $_
+        if ((Read-Host 'Jalankan diagnosis dan opsi perbaikan? (Y/N)') -match '^[Yy]$') {
+            Invoke-ToolkitPrinterConnectionDiagnostic -HostName $hostName -ShareName $shareName -ConnectionError $connectError
+        }
     }
 }
 
@@ -566,6 +814,8 @@ while ($true) {
 
                 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 
+                $failedApps = @()
+                $rebootRequired = $false
                 foreach ($app in $selectedApps) {
                     Write-Host "`nProcessing $($app.name)..." -ForegroundColor Yellow
                     
@@ -616,7 +866,9 @@ while ($true) {
                         try {
                             $proc = Start-Process -FilePath $offlineInstaller -ArgumentList $app.args -PassThru -ErrorAction Stop
                             $proc.WaitForExit()
-                            Write-Host "   [OK] $($app.name) installed from Offline Storage." -ForegroundColor Green
+                            if ($proc.ExitCode -notin @(0, 3010)) { throw "Installer exit code $($proc.ExitCode). Source installer retained." }
+                            if ($proc.ExitCode -eq 3010) { $rebootRequired = $true }
+                            Write-Host "   [OK] $($app.name) installer completed (code $($proc.ExitCode))." -ForegroundColor Green
                             $installed = $true
                         } catch {
                             Write-Host "   [WARN] Offline execution failed: $_" -ForegroundColor Yellow
@@ -624,7 +876,7 @@ while ($true) {
                     }
 
                     # 2. Fallback to Winget if offline installer not found
-                    if (-not $installed) {
+                    if (-not $installed -and (Get-Command winget -ErrorAction SilentlyContinue)) {
                         Write-Host "   [Winget] Attempting installation via Windows Package Manager..." -ForegroundColor Gray
                         $wingetRes = & winget install --id $app.id --silent --accept-package-agreements --accept-source-agreements --scope machine --override "/silent" 2>&1
                         if ($LASTEXITCODE -eq 0) {
@@ -646,293 +898,30 @@ while ($true) {
                             if (Test-Path $app.out) {
                                 $proc = Start-Process -FilePath $app.out -ArgumentList $app.args -PassThru -ErrorAction Stop
                                 $proc.WaitForExit()
+                                if ($proc.ExitCode -notin @(0, 3010)) { throw "Installer exit code $($proc.ExitCode). Installer retained at $($app.out)." }
+                                if ($proc.ExitCode -eq 3010) { $rebootRequired = $true }
                                 Remove-Item $app.out -Force -ErrorAction SilentlyContinue
-                                Write-Host "   [OK] $($app.name) installed successfully." -ForegroundColor Green
+                                $installed = $true
+                                Write-Host "   [OK] $($app.name) installer completed (code $($proc.ExitCode))." -ForegroundColor Green
                             }
                         } catch {
                             Write-Host "   [WARN] Direct download failed for $($app.name): $_" -ForegroundColor Red
                         }
                     }
+                    if (-not $installed) { $failedApps += $app.name }
                 }
 
-                Write-Host "`n[OK] Installation completed." -ForegroundColor Green
+                if ($failedApps.Count) {
+                    Write-Host "`n[ERROR] Installation not confirmed: $($failedApps -join ', ')" -ForegroundColor Red
+                } else {
+                    Write-Host "`n[OK] All selected installers reported success. Verify applications before handover." -ForegroundColor Green
+                }
+                if ($rebootRequired) { Write-Host '[REBOOT REQUIRED] Restart Windows to finish installation.' -ForegroundColor Yellow }
                 Start-Sleep -Seconds 2
             }
         }
         "2" {
-            while ($true) {
-                Clear-Host
-                
-                # Detect Hardware Specs (Drive Type & RAM Size)
-                $driveC = Get-Volume -DriveLetter C -ErrorAction SilentlyContinue
-                $diskType = "Unknown / HDD"
-                try {
-                    $part = Get-Partition -DriveLetter C -ErrorAction SilentlyContinue
-                    if ($part) {
-                        $disk = Get-Disk -Number $part.DiskNumber -ErrorAction SilentlyContinue
-                        if ($disk) {
-                            if ($disk.MediaType -eq "SSD" -or $disk.BusType -in @("NVMe", "SATA") -and $disk.FriendlyName -match "SSD|NVMe|NAND|Flash|eMMC") {
-                                $diskType = "SSD ($($disk.BusType) - $($disk.FriendlyName))"
-                            } elseif ($disk.MediaType -eq "HDD") {
-                                $diskType = "HDD (Mechanical Hard Disk)"
-                            } else {
-                                $diskType = "$($disk.MediaType) ($($disk.BusType))"
-                            }
-                        }
-                    }
-                } catch { $diskType = "Drive C: Generic" }
-
-                $ramTotalGB = [math]::Round(((Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue | Measure-Object -Property Capacity -Sum).Sum / 1GB), 1)
-
-                Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host "          WINDOWS PERFORMANCE & POTATO PC OPTIMIZER (RAM/DISK)           " -ForegroundColor Cyan
-                Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host ""
-                Write-Host "   Detected Storage (C:) : $diskType" -ForegroundColor Yellow
-                Write-Host "   Detected Total RAM    : $ramTotalGB GB" -ForegroundColor Yellow
-                Write-Host ""
-                Write-Host "   [1] Smart Auto-Boost         (Auto-Tune based on detected Hardware & RAM)" -ForegroundColor Green
-                Write-Host ""
-                Write-Host "   --- Target Performance Profiles ---" -ForegroundColor Yellow
-                Write-Host "   [2] Mechanical HDD 100% Fix  (Stop SysMain/Superfetch, Indexing, Prefetch)"
-                Write-Host "   [3] SSD Health & TRIM Tune   (Enable TRIM, Re-Trim I/O, Disable Bad Defrag)"
-                Write-Host "   [4] Low RAM / Memory Saver   (Optimized Pagefile, Kill Background Extensions)"
-                Write-Host "   [5] Strip Visual Animations  (Best Performance UI, Keep Fonts Crisp & Smooth)"
-                Write-Host "   [6] Standard Windows Tweaks  (Dark Mode, Classic Explorer, File Extensions)"
-                Write-Host "   [7] Safe AppX Bloatware Purge (Remove Junk Games, Ads, News, Weather & Cortana)"
-                Write-Host "   [8] Revert / Restore Default (Restore SysMain, Visual Effects & Settings)"
-                Write-Host ""
-                Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
-                Write-Host "=========================================================================" -ForegroundColor Cyan
-                Write-Host ""
-
-                $tweakChoice = Read-Host "Select option (0-8)"
-                if ($tweakChoice -eq "0") {
-                    break
-                }
-                switch ($tweakChoice) {
-                    "1" {
-                        Write-Host "`nRunning Smart Auto-Boost for detected Hardware ($diskType, ${ramTotalGB}GB RAM)..." -ForegroundColor Yellow
-                        
-                        # 1. UI Tweaks (Dark Mode & Explorer)
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v AppsUseLightTheme /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v SystemUsesLightTheme /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v LaunchTo /t REG_DWORD /d 1 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\DeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f >$null 2>&1
-                        
-                        # 2. Disable Background Bloatware & Telemetry
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338388Enabled /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338389Enabled /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f >$null 2>&1
-                        
-                        # 3. Disable Edge Startup Boost & Background Extensions (Save 400MB+ RAM)
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v StartupBoostEnabled /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v BackgroundModeEnabled /t REG_DWORD /d 0 /f >$null 2>&1
-
-                        # 4. Storage specific optimization
-                        if ($diskType -match "SSD") {
-                            Write-Host "   [SSD Profile Applied] Running TRIM & Optimizing SSD I/O..." -ForegroundColor Cyan
-                            fsutil behavior set DisableDeleteNotify 0 >$null 2>&1
-                            Optimize-Volume -DriveLetter C -ReTrim -Verbose -ErrorAction SilentlyContinue
-                        } else {
-                            Write-Host "   [HDD Profile Applied] Disabling SysMain & Prefetcher (Fixing 100% Disk Usage)..." -ForegroundColor Cyan
-                            Stop-Service -Name "SysMain" -Force -ErrorAction SilentlyContinue
-                            Set-Service -Name "SysMain" -StartupType Disabled -ErrorAction SilentlyContinue
-                            reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnablePrefetcher /t REG_DWORD /d 0 /f >$null 2>&1
-                            reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnableSuperfetch /t REG_DWORD /d 0 /f >$null 2>&1
-                        }
-
-                        # 5. Low RAM strip visual effects if RAM <= 8GB
-                        if ($ramTotalGB -le 8) {
-                            Write-Host "   [Low RAM Tuning] Disabling heavy UI animations while keeping clean fonts..." -ForegroundColor Cyan
-                            reg add "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9012038010000000 /f >$null 2>&1
-                            reg add "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_SZ /d 0 /f >$null 2>&1
-                            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f >$null 2>&1
-                            reg add "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 50 /f >$null 2>&1
-                        }
-
-                        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-                        Start-Process explorer
-                        Write-Host "`n[OK] Smart Auto-Boost applied successfully!" -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "2" {
-                        Write-Host "`nApplying Aggressive HDD 100% Disk Usage Fix..." -ForegroundColor Yellow
-                        
-                        # 1. Stop and Disable SysMain (Superfetch)
-                        Write-Host "   [1/4] Disabling SysMain (Superfetch) Service..." -ForegroundColor Gray
-                        Stop-Service -Name "SysMain" -Force -ErrorAction SilentlyContinue
-                        Set-Service -Name "SysMain" -StartupType Disabled -ErrorAction SilentlyContinue
-
-                        # 2. Disable Prefetch & Superfetch in Registry
-                        Write-Host "   [2/4] Disabling Prefetch Parameters in Memory Management..." -ForegroundColor Gray
-                        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnablePrefetcher /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnableSuperfetch /t REG_DWORD /d 0 /f >$null 2>&1
-
-                        # 3. Disable Connected User Experiences & Telemetry (DiagTrack)
-                        Write-Host "   [3/4] Stopping Background Telemetry Logging (DiagTrack)..." -ForegroundColor Gray
-                        Stop-Service -Name "DiagTrack" -Force -ErrorAction SilentlyContinue
-                        Set-Service -Name "DiagTrack" -StartupType Disabled -ErrorAction SilentlyContinue
-
-                        # 4. Limit Windows Search Indexing on Slow Drives
-                        Write-Host "   [4/4] Optimizing Windows Search Indexing..." -ForegroundColor Gray
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" /v PreventIndexingLowDiskSpaceMB /t REG_DWORD /d 500 /f >$null 2>&1
-
-                        Write-Host "`n[OK] Mechanical HDD Disk 100% mitigations applied successfully!" -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "3" {
-                        Write-Host "`nApplying SSD Health & TRIM Performance Optimization..." -ForegroundColor Yellow
-                        
-                        # 1. Enable and verify TRIM
-                        Write-Host "   [1/3] Enabling NTFS/ReFS TRIM Notifications (fsutil)..." -ForegroundColor Gray
-                        fsutil behavior set DisableDeleteNotify 0 >$null 2>&1
-
-                        # 2. Disable automatic defragmentation on SSD
-                        Write-Host "   [2/3] Configuring Storage Defragmenter to Re-Trim mode only..." -ForegroundColor Gray
-                        reg add "HKLM\SOFTWARE\Microsoft\Dfrg\BootOptimizeFunction" /v Enable /t REG_SZ /d "N" /f >$null 2>&1
-
-                        # 3. Trigger manual Re-Trim on Drive C:
-                        Write-Host "   [3/3] Executing live Re-Trim command on Drive C:..." -ForegroundColor Gray
-                        Optimize-Volume -DriveLetter C -ReTrim -Verbose -ErrorAction SilentlyContinue
-
-                        Write-Host "`n[OK] SSD Health & TRIM tuning completed!" -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "4" {
-                        Write-Host "`nApplying Low RAM & Memory Saver Profile..." -ForegroundColor Yellow
-                        
-                        # 1. Disable Edge background extension & startup preload
-                        Write-Host "   [1/3] Disabling Edge Preload and Background Extensions (Saves ~400MB RAM)..." -ForegroundColor Gray
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v StartupBoostEnabled /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v BackgroundModeEnabled /t REG_DWORD /d 0 /f >$null 2>&1
-
-                        # 2. Disable Background GameDVR & Xbox capture
-                        Write-Host "   [2/3] Disabling GameDVR / Xbox background screen recording..." -ForegroundColor Gray
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f >$null 2>&1
-
-                        # 3. Disable Background Telemetry & Content Delivery Manager
-                        Write-Host "   [3/3] Disabling Silent App Downloads & Telemetry..." -ForegroundColor Gray
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f >$null 2>&1
-
-                        Write-Host "`n[OK] Low RAM Memory Saver settings applied!" -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "5" {
-                        Write-Host "`nStripping Heavy Visual Animations (Optimizing for Performance)..." -ForegroundColor Yellow
-                        
-                        # Set Best Performance mask while keeping font smoothing & thumbnails
-                        reg add "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9012038010000000 /f >$null 2>&1
-                        reg add "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_SZ /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 50 /f >$null 2>&1
-                        
-                        # Ensure font smoothing remains ON for readability
-                        reg add "HKCU\Control Panel\Desktop" /v FontSmoothing /t REG_SZ /d 2 /f >$null 2>&1
-                        reg add "HKCU\Control Panel\Desktop" /v FontSmoothingType /t REG_DWORD /d 2 /f >$null 2>&1
-
-                        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-                        Start-Process explorer
-                        
-                        Write-Host "[OK] Visual animations stripped and UI responsiveness set to instant." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "6" {
-                        Write-Host "`nApplying Standard Windows 11/10 UI Tweaks..." -ForegroundColor Yellow
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v AppsUseLightTheme /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v SystemUsesLightTheme /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v LaunchTo /t REG_DWORD /d 1 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Hidden /t REG_DWORD /d 1 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel" /v "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel" /v "{59031a47-3f72-44a7-89c5-5595fe6b30ee}" /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\DeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f >$null 2>&1
-                        
-                        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSecondsInSystemClock /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSecondsInSystemClock /t REG_DWORD /d 0 /f >$null 2>&1
-                        reg add "HKCU\Control Panel\International" /v sShortTime /t REG_SZ /d "HH:mm" /f >$null 2>&1
-                        
-                        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-                        Start-Process explorer
-                        Write-Host "[OK] Standard UI tweaks applied." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "7" {
-                        Write-Host "`nPurging Safe AppX Junk Bloatware (Games, Promo Apps, News, Cortana)..." -ForegroundColor Yellow
-                        Write-Host "      [Safety Rule] Keeping Calculator, Photos, Store, Paint, Notepad intact." -ForegroundColor Gray
-                        
-                        $safeBloatwareList = @(
-                            "*CandyCrush*", "*Disney*", "*BubbleWitch*", "*FarmHeroes*", "*MarchofEmpires*",
-                            "*SolitaireCollection*", "*TikTok*", "*Instagram*", "*Facebook*", "*SpotifyAB.SpotifyMusic*",
-                            "*Microsoft.BingNews*", "*Microsoft.BingWeather*", "*Microsoft.BingSports*", "*Microsoft.BingFinance*",
-                            "*Microsoft.3DBuilder*", "*Microsoft.MixedReality.Portal*", "*Microsoft.GetHelp*",
-                            "*Microsoft.Getstarted*", "*Microsoft.MicrosoftOfficeHub*", "*Microsoft.People*",
-                            "*Microsoft.SkypeApp*", "*Microsoft.YourPhone*", "*Microsoft.ZuneMusic*", "*Microsoft.ZuneVideo*",
-                            "*Microsoft.549981C3F5F10*", "*Clipchamp*", "*Microsoft.Todos*"
-                        )
-
-                        $removedCount = 0
-                        foreach ($pkg in $safeBloatwareList) {
-                            $apps = Get-AppxPackage -AllUsers $pkg -ErrorAction SilentlyContinue
-                            foreach ($app in $apps) {
-                                try {
-                                    Write-Host "   [-] Removing: $($app.Name)..." -ForegroundColor DarkGray
-                                    Remove-AppxPackage -Package $app.PackageFullName -AllUsers -ErrorAction SilentlyContinue
-                                    $removedCount++
-                                } catch {}
-                            }
-                            $provApps = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like $pkg }
-                            foreach ($prov in $provApps) {
-                                Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction SilentlyContinue | Out-Null
-                            }
-                        }
-
-                        # Disable Windows Consumer Features / Silent App Installations
-                        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /t REG_DWORD /d 1 /f >$null 2>&1
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f >$null 2>&1
-
-                        Write-Host "`n[OK] Safe Bloatware Purge complete ($removedCount packages removed)!" -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "8" {
-                        Write-Host "`nRestoring Default Windows Performance Settings..." -ForegroundColor Yellow
-                        
-                        # 1. Restore SysMain and DiagTrack
-                        Set-Service -Name "SysMain" -StartupType Automatic -ErrorAction SilentlyContinue
-                        Start-Service -Name "SysMain" -ErrorAction SilentlyContinue
-                        Set-Service -Name "DiagTrack" -StartupType Automatic -ErrorAction SilentlyContinue
-                        Start-Service -Name "DiagTrack" -ErrorAction SilentlyContinue
-
-                        # 2. Restore Prefetcher
-                        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnablePrefetcher /t REG_DWORD /d 3 /f >$null 2>&1
-                        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnableSuperfetch /t REG_DWORD /d 3 /f >$null 2>&1
-
-                        # 3. Restore Visual Effects & Transparency
-                        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 1 /f >$null 2>&1
-                        reg add "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 400 /f >$null 2>&1
-                        reg delete "HKCU\Control Panel\Desktop" /v UserPreferencesMask /f >$null 2>&1
-
-                        # 4. Restore Edge policies
-                        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v StartupBoostEnabled /f >$null 2>&1
-                        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v BackgroundModeEnabled /f >$null 2>&1
-
-                        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-                        Start-Process explorer
-                        
-                        Write-Host "[OK] Default settings restored successfully." -ForegroundColor Green
-                        Start-Sleep -Seconds 2
-                    }
-                    "0" { break }
-                }
-            }
+            Show-ToolkitPerformanceMenu
         }
         "3" {
             Write-Host "`nRunning DISM & SFC..." -ForegroundColor Yellow
@@ -966,12 +955,13 @@ while ($true) {
                 Write-Host "   [7] Connect Shared Printer (Client)            (Add \\HOST\SHARE and test SMB)" -ForegroundColor Cyan
                 Write-Host "   [8] Printer Share Status / Report              (List shares, TCP 445 test, save report)" -ForegroundColor Cyan
                 Write-Host "   [9] Remove Printer Share / Client Mapping     (Rollback a share or connection)" -ForegroundColor Yellow
+                Write-Host "   [10] Diagnose / Repair Printer Sharing Connection (Login, SMB/RPC, driver, retry)" -ForegroundColor Cyan
                 Write-Host ""
                 Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host ""
 
-                $printChoice = Read-Host "Select option (0-9)"
+                $printChoice = Read-Host "Select option (0-10)"
                 if ($printChoice -eq "0") {
                     break
                 }
@@ -1144,6 +1134,10 @@ while ($true) {
                         Write-Host "`n=== Remove Printer Share / Client Mapping ===" -ForegroundColor Yellow
                         Remove-ToolkitPrinterShareMapping
                         Start-Sleep -Seconds 2
+                    }
+                    "10" {
+                        Invoke-ToolkitPrinterConnectionDiagnostic
+                        Read-Host 'Press Enter to return' | Out-Null
                     }
                 }
             }
@@ -1937,6 +1931,7 @@ while ($true) {
                     if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
                         $installSucceeded = $true
                         Write-Host "      [OK] Kaspersky installer completed (ExitCode: $($proc.ExitCode))." -ForegroundColor Green
+                        if ($proc.ExitCode -eq 3010) { Write-Host '      [REBOOT REQUIRED] Installation is pending a Windows restart.' -ForegroundColor Yellow }
                         Remove-Item -LiteralPath $tempInstaller -Force -ErrorAction SilentlyContinue
                     } else {
                         Write-Host "      [ERROR] Kaspersky installer exited with code $($proc.ExitCode). Installer retained at $tempInstaller for diagnosis." -ForegroundColor Red
