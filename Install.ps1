@@ -248,6 +248,47 @@ function Get-ToolkitDeploymentCredential {
     return $script:ToolkitDeploymentCredential
 }
 
+function Set-ToolkitDeviceIdentity {
+    param([string]$Identity)
+    if ([string]::IsNullOrWhiteSpace($Identity)) { return $false }
+    try {
+        $description = $Identity.Trim().ToUpperInvariant()
+        if ($description -notmatch '^[A-Z0-9][A-Z0-9-]*[A-Z0-9]$') {
+            throw 'Use letters, numbers and hyphens only (no leading/trailing hyphen).'
+        }
+        $hostname = $description
+        if ($hostname.Length -gt 15) {
+            if ($description -match '^(.+?-DOK)(?:-|$)' -and $Matches[1].Length -le 15) {
+                $hostname = $Matches[1]
+            } else {
+                $hostname = (Read-Host 'Full description exceeds 15 characters. Enter a unique short Windows hostname').Trim().ToUpperInvariant()
+            }
+        }
+        if ($hostname.Length -gt 15 -or $hostname -notmatch '^[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?$' -or $hostname -match '^\d+$') {
+            throw 'Windows hostname must be 1-15 characters, not all numeric, with no leading/trailing hyphen.'
+        }
+        $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        if ($computer.PartOfDomain) { throw 'Domain-joined computer: coordinate rename with the domain administrator.' }
+        $pendingPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName'
+        $pending = (Get-ItemProperty -Path $pendingPath -ErrorAction Stop).ComputerName
+        if ($pending -ne $hostname) {
+            Rename-Computer -NewName $hostname -Force -ErrorAction Stop
+        }
+        $verified = (Get-ItemProperty -Path $pendingPath -ErrorAction Stop).ComputerName
+        if ($verified -ne $hostname) { throw 'Requested hostname was not retained by Windows.' }
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters' -Name 'srvcomment' -Value $description -ErrorAction Stop
+        Write-Host "      [OK] Verified pending hostname: $hostname; description: $description" -ForegroundColor Green
+        if ($computer.Name -ne $hostname) {
+            Write-Host "      [REBOOT REQUIRED] Active hostname is still $($computer.Name). Save work and reboot manually." -ForegroundColor Yellow
+        }
+        Write-Host '      [LAN SWEEPER] AssetName/UserDomain update after reboot and a successful fresh scan. FullName does not rename the login account or profile.' -ForegroundColor Yellow
+        return $true
+    } catch {
+        Write-Host "      [ERROR] Device identity update failed: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
 function Set-ToolkitLocalAccountDisplayName {
     Write-Host "`nOptional: update a local account's display/full name (does not rename the account or profile folder)." -ForegroundColor Cyan
     $accountName = (Read-Host 'Local username to update [Press Enter to skip]').Trim()
@@ -307,13 +348,21 @@ function Install-ToolkitAgent {
             return $false
         }
         if ($process.ExitCode -ne 0) { throw "Installer exit code: $($process.ExitCode)" }
-        $service = Get-Service -Name $ServiceName -ErrorAction Stop
-        if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) {
-            Start-Service -Name $ServiceName -ErrorAction Stop
+        $service = if ($ServiceName -eq 'LansweeperAgentService') {
+            Get-ToolkitLsAgentService
+        } else {
+            Get-Service -Name $ServiceName -ErrorAction Stop
         }
-        $service = Get-Service -Name $ServiceName -ErrorAction Stop
+        if (-not $service) { throw "The expected service '$ServiceName' was not found after installation." }
+        if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) {
+            Start-Service -Name $service.Name -ErrorAction Stop
+        }
+        $service = Get-Service -Name $service.Name -ErrorAction Stop
         $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
-        Write-Host "[OK] $ServiceName is installed and running. Server check-in is not yet verified." -ForegroundColor Green
+        if ($ServiceName -eq 'LansweeperAgentService') {
+            Repair-ToolkitLsAgentService | Out-Null
+        }
+        Write-Host "[OK] $($service.DisplayName) is installed and running. Server check-in still requires verification." -ForegroundColor Green
         return $true
     } catch {
         Write-Host "[ERROR] Agent installation not verified: $($_.Exception.Message)" -ForegroundColor Red
@@ -372,6 +421,111 @@ function Connect-ToolkitDeploymentShare {
         return $true
     } catch {
         Write-Host "[ERROR] Unable to connect to $Root : $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+function Get-ToolkitLsAgentService {
+    # LsAgent service names vary slightly between Lansweeper installer builds.
+    foreach ($name in @('LansweeperAgentService', 'LsAgent')) {
+        $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+        if ($service) { return $service }
+    }
+    return Get-Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match '(?i)LsAgent|Lansweeper.*Agent' } |
+        Select-Object -First 1
+}
+
+function Test-ToolkitLsAgentServer {
+    param(
+        [string]$Server = '192.168.10.160',
+        [int]$Port = 9524
+    )
+    try {
+        return [bool](Test-NetConnection -ComputerName $Server -Port $Port -InformationLevel Quiet -WarningAction SilentlyContinue)
+    } catch {
+        return $false
+    }
+}
+
+function Repair-ToolkitLsAgentConfiguration {
+    param(
+        [string]$Server = '192.168.10.160',
+        [int]$Port = 9524
+    )
+
+    $configPaths = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'LansweeperAgent\LsAgent.ini'),
+        (Join-Path $env:ProgramFiles 'LansweeperAgent\LsAgent.ini'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Lansweeper\Client\LsAgent.ini'),
+        (Join-Path $env:ProgramFiles 'Lansweeper\Client\LsAgent.ini')
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+
+    $configPath = $configPaths | Select-Object -First 1
+    if (-not $configPath) {
+        Write-Host '      [INFO] LsAgent.ini was not found; installer defaults will be retained.' -ForegroundColor Gray
+        return $false
+    }
+
+    try {
+        $lines = @(Get-Content -LiteralPath $configPath -ErrorAction Stop)
+        $serverLine = $lines | Where-Object { $_ -match '^\s*Server\s*=' } | Select-Object -First 1
+        $portLine = $lines | Where-Object { $_ -match '^\s*Port\s*=' } | Select-Object -First 1
+        $currentServer = if ($serverLine) { ($serverLine -replace '^\s*Server\s*=\s*', '').Trim() } else { '' }
+        $currentPort = if ($portLine) { ($portLine -replace '^\s*Port\s*=\s*', '').Trim() } else { '' }
+        Write-Host "      [INFO] LsAgent.ini: Server=$currentServer Port=$currentPort" -ForegroundColor Gray
+
+        if ($currentServer -eq $Server -and $currentPort -eq [string]$Port) { return $false }
+        if (-not $serverLine -or -not $portLine) {
+            Write-Host '      [WARN] LsAgent.ini format is not recognized; no file changes were made.' -ForegroundColor Yellow
+            return $false
+        }
+
+        $backup = "$configPath.$(Get-Date -Format yyyyMMddHHmmss).bak"
+        Copy-Item -LiteralPath $configPath -Destination $backup -ErrorAction Stop
+        $updatedLines = $lines | ForEach-Object {
+            if ($_ -match '^\s*Server\s*=') { "Server=$Server" }
+            elseif ($_ -match '^\s*Port\s*=') { "Port=$Port" }
+            else { $_ }
+        }
+        Set-Content -LiteralPath $configPath -Value $updatedLines -Encoding ascii -ErrorAction Stop
+        Write-Host "      [OK] LsAgent.ini corrected to ${Server}:$Port. Backup: $backup" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "      [WARN] Could not validate/update LsAgent.ini: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+function Repair-ToolkitLsAgentService {
+    $service = Get-ToolkitLsAgentService
+    if (-not $service) {
+        Write-Host '      [INFO] LsAgent service is not installed.' -ForegroundColor Yellow
+        return $false
+    }
+
+    try {
+        $configChanged = Repair-ToolkitLsAgentConfiguration
+        Set-Service -Name $service.Name -StartupType Automatic -ErrorAction Stop
+        # Recover from a transient service crash without changing firewall or
+        # authentication policy. The service restarts after 60s, then 5m.
+        & sc.exe failure $service.Name reset= 86400 actions= restart/60000/restart/300000/none/0 | Out-Null
+        & sc.exe failureflag $service.Name 1 | Out-Null
+        if ($configChanged -and $service.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Running) {
+            Restart-Service -Name $service.Name -Force -ErrorAction Stop
+            $service = Get-Service -Name $service.Name -ErrorAction Stop
+        } elseif ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) {
+            Start-Service -Name $service.Name -ErrorAction Stop
+            $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
+        }
+        $transport = Test-ToolkitLsAgentServer
+        Write-Host "      [OK] $($service.DisplayName) is Running (Automatic). Server 192.168.10.160:9524 reachable: $transport" -ForegroundColor Green
+        if (-not $transport) {
+            Write-Host '      [NEXT] Check routing/firewall to TCP 9524; the agent itself is running.' -ForegroundColor Yellow
+        }
+        return $true
+    } catch {
+        Write-Host "      [ERROR] Could not repair $($service.DisplayName): $($_.Exception.Message)" -ForegroundColor Red
         return $false
     }
 }
@@ -1621,20 +1775,20 @@ while ($true) {
             $inputIdentity = Read-Host "Enter Device Hostname (e.g. BERSA-DOK-HRGA) [Press Enter to skip]"
 
             if ($inputIdentity) {
-                $cleanDescription = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
-                $cleanHostname = $cleanDescription
-                if ($cleanHostname.Length -gt 15) {
-                    if ($cleanDescription -match '^(.*?-DOK)') {
-                        $cleanHostname = $Matches[1]
-                    } else {
-                        $cleanHostname = $cleanHostname.Substring(0, 15)
-                    }
-                }
+                Set-ToolkitDeviceIdentity -Identity $inputIdentity | Out-Null
+            }
 
-                Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanDescription -ErrorAction SilentlyContinue
-
-                Write-Host "      [OK] Hostname set to: $cleanHostname (Description: $cleanDescription)" -ForegroundColor Green
+            # If LsAgent is already installed, repair it in place instead of
+            # reinstalling every time the toolkit is run. This preserves the
+            # existing agent identity and avoids duplicate assets in Lansweeper.
+            $existingLsAgent = Get-ToolkitLsAgentService
+            if ($existingLsAgent) {
+                Write-Host "`n[INFO] Existing LsAgent detected: $($existingLsAgent.DisplayName)" -ForegroundColor Cyan
+                Repair-ToolkitLsAgentService | Out-Null
+                Write-Host '      The agent identity was preserved; verify the next check-in in Lansweeper.' -ForegroundColor Gray
+                Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
+                Read-Host | Out-Null
+                continue
             }
 
             # 1. Create or update local admin account for remote deployment
@@ -1767,20 +1921,7 @@ while ($true) {
             $inputIdentity = Read-Host "Enter Device Hostname (e.g. BERSA-DOK-HRGA) [Press Enter to skip]"
 
             if ($inputIdentity) {
-                $cleanDescription = ($inputIdentity -replace '[^a-zA-Z0-9-]', '').ToUpper()
-                $cleanHostname = $cleanDescription
-                if ($cleanHostname.Length -gt 15) {
-                    if ($cleanDescription -match '^(.*?-DOK)') {
-                        $cleanHostname = $Matches[1]
-                    } else {
-                        $cleanHostname = $cleanHostname.Substring(0, 15)
-                    }
-                }
-
-                Rename-Computer -NewName $cleanHostname -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\lanmanserver\parameters" -Name "srvcomment" -Value $cleanDescription -ErrorAction SilentlyContinue
-
-                Write-Host "      [OK] Hostname set to: $cleanHostname (Description: $cleanDescription)" -ForegroundColor Green
+                Set-ToolkitDeviceIdentity -Identity $inputIdentity | Out-Null
             }
 
             Set-ToolkitLocalAccountDisplayName | Out-Null
