@@ -425,6 +425,79 @@ function Connect-ToolkitDeploymentShare {
     }
 }
 
+function Set-ToolkitClientAdministrator {
+    param([Parameter(Mandatory=$true)][string]$UserName,
+          [Parameter(Mandatory=$true)][securestring]$Password)
+    try {
+        $account = Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue
+        if (-not $account) {
+            New-LocalUser -Name $UserName -Password $Password -PasswordNeverExpires -AccountNeverExpires -ErrorAction Stop | Out-Null
+        } else {
+            Set-LocalUser -Name $UserName -Password $Password -PasswordNeverExpires $true -AccountNeverExpires -ErrorAction Stop
+        }
+        Enable-LocalUser -Name $UserName -ErrorAction Stop
+        $account = Get-LocalUser -Name $UserName -ErrorAction Stop
+        # SID works on both English and Indonesian Windows installations.
+        $admins = Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop
+        $members = @(Get-LocalGroupMember -Group $admins.Name -ErrorAction Stop)
+        if ($account.SID.Value -notin @($members | ForEach-Object { $_.SID.Value })) {
+            Add-LocalGroupMember -Group $admins.Name -Member "$env:COMPUTERNAME\$UserName" -ErrorAction Stop
+        }
+        $members = @(Get-LocalGroupMember -Group $admins.Name -ErrorAction Stop)
+        if (-not $account.Enabled -or $account.SID.Value -notin @($members | ForEach-Object { $_.SID.Value })) {
+            throw 'Account enablement or administrator membership was not retained.'
+        }
+        Write-Host "      [OK] Verified local administrator: $UserName (enabled, password updated)." -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "      [ERROR] Local administrator setup failed: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+function Enable-ToolkitRemoteInventoryAccess {
+    param([string]$ServerAddress='192.168.10.160')
+    $success = $true
+    try {
+        $path='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+        New-ItemProperty -Path $path -Name LocalAccountTokenFilterPolicy -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
+        if ((Get-ItemProperty -Path $path -ErrorAction Stop).LocalAccountTokenFilterPolicy -ne 1) { throw 'Remote UAC policy verification failed.' }
+        # Restrict toolkit-managed inbound permissions to the scanning server.
+        $definitions=@(
+            @{Name='ITToolkit-Lansweeper-SMB'; Port='445'; Service='LanmanServer'},
+            @{Name='ITToolkit-Lansweeper-RPC'; Port='135'; Service='RpcSs'},
+            @{Name='ITToolkit-Lansweeper-WMI'; Port='RPC'; Service='Winmgmt'}
+        )
+        foreach($definition in $definitions) {
+            $existing=Get-NetFirewallRule -Name $definition.Name -ErrorAction SilentlyContinue
+            if ($existing) { Remove-NetFirewallRule -Name $definition.Name -ErrorAction Stop }
+            New-NetFirewallRule -Name $definition.Name -DisplayName $definition.Name -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort $definition.Port -Service $definition.Service -RemoteAddress $ServerAddress -ErrorAction Stop | Out-Null
+            $rule=Get-NetFirewallRule -Name $definition.Name -ErrorAction Stop
+            $scope=$rule | Get-NetFirewallAddressFilter -ErrorAction Stop
+            if ([string]$rule.Enabled -ne 'True' -or [string]$rule.Action -ne 'Allow' -or $ServerAddress -notin @($scope.RemoteAddress)) { throw "Firewall verification failed: $($definition.Name)" }
+        }
+    } catch {
+        $success=$false
+        Write-Host "      [ERROR] Remote access policy/firewall: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    foreach($name in @('LanmanServer','winmgmt','RemoteRegistry')) {
+        try {
+            Set-Service -Name $name -StartupType Automatic -ErrorAction Stop
+            Start-Service -Name $name -ErrorAction Stop
+            $service=Get-Service -Name $name -ErrorAction Stop
+            $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
+        } catch {
+            $success=$false
+            Write-Host "      [ERROR] Service ${name}: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+    if($success) {
+        Write-Host "      [OK] Local SMB/WMI setup verified; inbound rules scoped to $ServerAddress." -ForegroundColor Green
+        Write-Host '      [NEXT] Verify remote login from Lansweeper. Wi-Fi isolation, routing, third-party firewall and scanning credentials require separate checks.' -ForegroundColor Yellow
+    }
+    return $success
+}
+
 function Get-ToolkitLsAgentService {
     # LsAgent service names vary slightly between Lansweeper installer builds.
     foreach ($name in @('LansweeperAgentService', 'LsAgent')) {
@@ -510,7 +583,9 @@ function Repair-ToolkitLsAgentService {
         # Recover from a transient service crash without changing firewall or
         # authentication policy. The service restarts after 60s, then 5m.
         & sc.exe failure $service.Name reset= 86400 actions= restart/60000/restart/300000/none/0 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Service recovery configuration failed (sc.exe $LASTEXITCODE)." }
         & sc.exe failureflag $service.Name 1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Service recovery flag failed (sc.exe $LASTEXITCODE)." }
         if ($configChanged -and $service.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Running) {
             Restart-Service -Name $service.Name -Force -ErrorAction Stop
             $service = Get-Service -Name $service.Name -ErrorAction Stop
@@ -518,6 +593,8 @@ function Repair-ToolkitLsAgentService {
             Start-Service -Name $service.Name -ErrorAction Stop
             $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
         }
+        $service=Get-Service -Name $service.Name -ErrorAction Stop
+        $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
         $transport = Test-ToolkitLsAgentServer
         Write-Host "      [OK] $($service.DisplayName) is Running (Automatic). Server 192.168.10.160:9524 reachable: $transport" -ForegroundColor Green
         if (-not $transport) {
@@ -1778,19 +1855,6 @@ while ($true) {
                 Set-ToolkitDeviceIdentity -Identity $inputIdentity | Out-Null
             }
 
-            # If LsAgent is already installed, repair it in place instead of
-            # reinstalling every time the toolkit is run. This preserves the
-            # existing agent identity and avoids duplicate assets in Lansweeper.
-            $existingLsAgent = Get-ToolkitLsAgentService
-            if ($existingLsAgent) {
-                Write-Host "`n[INFO] Existing LsAgent detected: $($existingLsAgent.DisplayName)" -ForegroundColor Cyan
-                Repair-ToolkitLsAgentService | Out-Null
-                Write-Host '      The agent identity was preserved; verify the next check-in in Lansweeper.' -ForegroundColor Gray
-                Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
-                Read-Host | Out-Null
-                continue
-            }
-
             # 1. Create or update local admin account for remote deployment
             $deployUser = [Environment]::GetEnvironmentVariable('IT_TOOLKIT_LOCAL_ADMIN_USER')
             if ([string]::IsNullOrWhiteSpace($deployUser)) { $deployUser = 'AsetDP' }
@@ -1799,27 +1863,23 @@ while ($true) {
                 $localAdminPasswordText = '@AsetDP25'
             }
             $deployPass = ConvertTo-SecureString $localAdminPasswordText -AsPlainText -Force
-            if (-not (Get-LocalUser -Name $deployUser -ErrorAction SilentlyContinue)) {
-                New-LocalUser -Name $deployUser -Password $deployPass -PasswordNeverExpires -AccountNeverExpires -ErrorAction SilentlyContinue | Out-Null
-                Add-LocalGroupMember -Group "Administrators" -Member $deployUser -ErrorAction SilentlyContinue
-                Write-Host "      [OK] Local admin account '$deployUser' created for remote management." -ForegroundColor Green
-            } else {
-                Set-LocalUser -Name $deployUser -Password $deployPass -PasswordNeverExpires $true -ErrorAction SilentlyContinue
-                Write-Host "      [OK] Local admin account '$deployUser' already exists. Password updated." -ForegroundColor Green
-            }
+            $adminReady = Set-ToolkitClientAdministrator -UserName $deployUser -Password $deployPass
 
             Set-ToolkitLocalAccountDisplayName | Out-Null
 
             # 2. Enable Firewall Rules, Services & Remote UAC (LocalAccountTokenFilterPolicy)
-            reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f >$null 2>&1
-            netsh advfirewall firewall set rule group="remote administration" new enable=yes >$null 2>&1
-            netsh advfirewall firewall set rule group="windows management instrumentation (wmi)" new enable=yes >$null 2>&1
-            netsh advfirewall firewall set rule group="file and printer sharing" new enable=yes >$null 2>&1
-            Set-Service -Name RemoteRegistry -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name RemoteRegistry -ErrorAction SilentlyContinue
-            Set-Service -Name winmgmt -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name winmgmt -ErrorAction SilentlyContinue
-            Write-Host "      [OK] WMI, RPC, Remote UAC, Remote Registry and administration rules enabled." -ForegroundColor Green
+            $remoteReady = Enable-ToolkitRemoteInventoryAccess
+            if (-not $adminReady -or -not $remoteReady) {
+                Write-Host '      [WARN] Remote deployment prerequisites are incomplete. LsAgent setup can still continue.' -ForegroundColor Yellow
+            }
+            $existingLsAgent = Get-ToolkitLsAgentService
+            if ($existingLsAgent) {
+                Write-Host "`n[INFO] Existing LsAgent detected: $($existingLsAgent.DisplayName)" -ForegroundColor Cyan
+                Repair-ToolkitLsAgentService | Out-Null
+                Write-Host '      Verify the next agent check-in and remote scanning credentials in Lansweeper.' -ForegroundColor Gray
+                Read-Host 'Press Enter to return to Main Menu' | Out-Null
+                continue
+            }
 
             # 2. Install LsAgent using the same source selection and local staging
             # pattern as Kaspersky: USB -> local disk -> network share by default.
