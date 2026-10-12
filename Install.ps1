@@ -37,6 +37,432 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit
 }
 
+function Get-ToolkitPeArchitecture {
+    param([string]$Path)
+    $stream = [IO.File]::OpenRead($Path)
+    $reader = New-Object IO.BinaryReader($stream)
+    try {
+        if ($stream.Length -lt 64 -or $reader.ReadUInt16() -ne 0x5A4D) { throw 'Not a Windows PE executable.' }
+        $stream.Position = 60
+        $offset = $reader.ReadInt32()
+        if ($offset -lt 64 -or $offset -gt $stream.Length - 6) { throw 'Invalid PE header offset.' }
+        $stream.Position = $offset
+        if ($reader.ReadUInt32() -ne 0x4550) { throw 'Invalid PE signature.' }
+        switch ($reader.ReadUInt16()) {
+            0x014c { return 'x86' }
+            0x8664 { return 'AMD64' }
+            0xaa64 { return 'ARM64' }
+            default { throw 'Unsupported PE architecture.' }
+        }
+    } finally { $reader.Dispose(); $stream.Dispose() }
+}
+
+function Get-ToolkitMeshSettings {
+    param([string]$Path)
+    if ([IO.Path]::GetExtension($Path) -eq '.msh') {
+        $text = [IO.File]::ReadAllText($Path)
+    } else {
+        $stream = [IO.File]::OpenRead($Path)
+        $reader = New-Object IO.BinaryReader($stream)
+        try {
+            if ($stream.Length -lt 20) { throw 'Mesh installer has no embedded group configuration.' }
+            $stream.Position = $stream.Length - 16
+            $marker = [BitConverter]::ToString($reader.ReadBytes(16))
+            if ($marker -ne 'B9-96-01-58-80-54-4A-19-B7-F7-E9-BE-44-91-4C-19') { throw 'No embedded Mesh policy found; include the matching .msh file.' }
+            $stream.Position = $stream.Length - 20
+            $lengthBytes = $reader.ReadBytes(4)
+            [Array]::Reverse($lengthBytes)
+            $length = [BitConverter]::ToUInt32($lengthBytes,0)
+            if ($length -eq 0 -or $length -gt 1MB -or $length -gt $stream.Length - 20) { throw 'Invalid embedded Mesh policy length.' }
+            $stream.Position = $stream.Length - 20 - $length
+            $text = [Text.Encoding]::UTF8.GetString($reader.ReadBytes($length))
+        } finally { $reader.Dispose(); $stream.Dispose() }
+    }
+    $settings = @{}
+    foreach ($line in ($text -split "`n")) {
+        if ($line -match '^\s*([^#;=]+?)\s*=(.*)$') { $settings[$Matches[1].Trim()] = $Matches[2].Trim() }
+    }
+    foreach ($key in @('MeshID','ServerID','MeshServer')) {
+        if ([string]::IsNullOrWhiteSpace($settings[$key])) { throw "Mesh policy is missing $key." }
+    }
+    $uri = $null
+    if (-not [Uri]::TryCreate($settings.MeshServer,[UriKind]::Absolute,[ref]$uri) -or $uri.Scheme -ne 'wss') { throw 'This workflow requires a secure wss MeshServer URL.' }
+    return $settings
+}
+
+function Test-ToolkitMeshRuntime {
+    param([string]$ServiceName, [hashtable]$Expected, [string]$Stage)
+    $escaped = $ServiceName.Replace("'","''")
+    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$escaped'" -ErrorAction Stop
+    if (-not $service -or $service.State -ne 'Running' -or $service.ProcessId -eq 0) { throw 'Mesh service is not running with a process.' }
+    $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($service.ProcessId)" -ErrorAction Stop
+    $exe = $process.ExecutablePath
+    if (-not $exe -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Cannot verify the running Mesh binary.' }
+    $stageRoot = [IO.Path]::GetFullPath($Stage).TrimEnd('\') + '\'
+    if ([IO.Path]::GetFullPath($exe).StartsWith($stageRoot,[StringComparison]::OrdinalIgnoreCase)) { throw 'Mesh service still runs from temporary staging; installation is incomplete.' }
+    $msh = [IO.Path]::ChangeExtension($exe,'.msh')
+    $actual = if (Test-Path -LiteralPath $msh -PathType Leaf) { Get-ToolkitMeshSettings $msh } else { Get-ToolkitMeshSettings $exe }
+    foreach ($key in @('MeshID','ServerID','MeshServer')) {
+        if ($actual[$key] -cne $Expected[$key]) { throw "Running Mesh configuration does not match selected installer: $key" }
+    }
+    Write-Host '[OK] Running Mesh process and server/group configuration verified locally. Confirm Online in the MeshCentral dashboard.' -ForegroundColor Green
+}
+
+function Convert-ToolkitSmbShare {
+    param([string]$Name, [string]$NewName)
+    $created = $false
+    try {
+        if ($Name -match '[\\/\[\]*?:;"<>|]' -or $NewName -match '[\\/\[\]*?:;"<>|]') { throw 'Enter exact ordinary share names without wildcard or path characters.' }
+        if ([string]::IsNullOrWhiteSpace($NewName) -or $Name -eq $NewName) { throw 'A different nonempty share name is required.' }
+        $old = Get-SmbShare -Name $Name -ErrorAction Stop
+        if (@($old).Count -ne 1) { throw 'Exactly one source share is required.' }
+        if ($old.Special -or $old.ScopeName -ne '*') { throw 'Only ordinary, non-clustered shares can be converted.' }
+        if (Get-SmbShare -Name $NewName -ErrorAction SilentlyContinue) { throw 'Destination share already exists.' }
+        if ([string]::IsNullOrWhiteSpace($old.SecurityDescriptor)) { throw 'Cannot read the original share permissions.' }
+        $settings = @{
+            Name=$NewName; Path=$old.Path; Description=$old.Description
+            SecurityDescriptor=$old.SecurityDescriptor; CachingMode=$old.CachingMode
+            FolderEnumerationMode=$old.FolderEnumerationMode; EncryptData=$old.EncryptData
+            ConcurrentUserLimit=$old.ConcurrentUserLimit; ContinuouslyAvailable=$old.ContinuouslyAvailable
+            ErrorAction='Stop'
+        }
+        # Create and verify first. Keep the original share available until this succeeds.
+        New-SmbShare @settings | Out-Null
+        $created = $true
+        $new = Get-SmbShare -Name $NewName -ErrorAction Stop
+        foreach ($property in @('Path','SecurityDescriptor','CachingMode','FolderEnumerationMode','EncryptData','ConcurrentUserLimit','ContinuouslyAvailable')) {
+            if ([string]$new.$property -cne [string]$old.$property) { throw "Replacement share differs: $property" }
+        }
+        Remove-SmbShare -Name $Name -Force -ErrorAction Stop
+        Write-Host "[OK] Share converted to $NewName with original permissions and settings." -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "[ERROR] Share conversion failed: $($_.Exception.Message)" -ForegroundColor Red
+        if ($created) {
+            try {
+                if (-not (Get-SmbShare -Name $Name -ErrorAction Stop)) { throw 'Original share is unavailable; keep the verified replacement for recovery.' }
+                Remove-SmbShare -Name $NewName -Force -ErrorAction Stop
+            }
+            catch { Write-Host "[ACTION] Could not remove replacement share $NewName; review both shares. $($_.Exception.Message)" -ForegroundColor Red }
+        }
+        return $false
+    }
+}
+
+function Get-ToolkitOtherAntivirus {
+    # Do not use Win32_Product: querying it can trigger MSI repair.
+    $products = @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntivirusProduct -ErrorAction Stop |
+        Where-Object { $_.displayName -notmatch '(?i)Defender|Kaspersky' } |
+        ForEach-Object { $_.displayName })
+    $vendorPattern = '(?i)\b(360\s*(Total|Safe|Security)|Qihoo|AVG|Avast|Smadav|McAfee|Norton|Symantec|Bitdefender|ESET|Malwarebytes|Avira|Sophos|Trend\s*Micro|Webroot|Panda\s*(Security|Protection)|F-Secure|Cylance|SentinelOne|TotalAV|K7\s*(AntiVirus|Security)|RAV\s*(Antivirus|Endpoint)|Reason\s*(Labs|Cybersecurity))\b'
+    foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+        if (Test-Path -LiteralPath $key) {
+            $products += @(Get-ChildItem -LiteralPath $key -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop |
+                Where-Object { $_.DisplayName -match $vendorPattern } | ForEach-Object { $_.DisplayName })
+        }
+    }
+    $products | Sort-Object -Unique
+}
+
+function Test-ToolkitAntivirusReady {
+    try {
+        while ($true) {
+            $others = @(Get-ToolkitOtherAntivirus)
+            if ($others.Count -eq 0) { break }
+            Write-Host "[ACTION] Uninstall incompatible antivirus using Windows/vendor uninstaller: $($others -join ', ')" -ForegroundColor Yellow
+            Write-Host 'Do not delete services/WMI/registry to hide detection. If remnants remain, use the vendor removal tool. Restart if requested; the staged Kaspersky installer is retained.' -ForegroundColor Yellow
+            $answer = Read-Host '[1] Open Programs and Features  [2] Recheck after uninstall  [0] Defer installation'
+            switch ($answer) {
+                '1' { Start-Process -FilePath "$env:SystemRoot\System32\control.exe" -ArgumentList 'appwiz.cpl' -ErrorAction Stop }
+                '2' { }
+                '0' { return $false }
+                default { Write-Host '[INFO] Select 1, 2 or 0.' }
+            }
+        }
+        foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
+            if (Test-Path -LiteralPath $key) { throw 'Windows restart is pending. Restart and rerun Kaspersky deployment.' }
+        }
+        $pending = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
+        if ($pending.PendingFileRenameOperations) { throw 'File/driver replacement is pending a restart. Restart before installing Kaspersky.' }
+        return $true
+    } catch {
+        Write-Host "[ERROR] Antivirus prerequisite check did not pass: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+function Get-ToolkitRdpWrapperDll {
+    param([string]$Directory, [string]$Architecture)
+    if ($Architecture -notin @('AMD64','x86')) { throw 'Official RDP Wrapper release supports x86/x64 only in this workflow.' }
+    $zipPath = Join-Path $Directory 'RDPWrap-v1.6.2.zip'
+    Invoke-WebRequest -Uri 'https://github.com/stascorp/rdpwrap/releases/download/v1.6.2/RDPWrap-v1.6.2.zip' -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+    $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256 -ErrorAction Stop).Hash
+    if ($hash -ne '35A9481DDBED5177431A9EA4BD09468FE987797D7B1231D64942D17EB54EC269') { throw 'Official release archive hash differs from the reviewed package.' }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
+    $resourceExe = Join-Path $Directory 'RDPWInst-resources.exe'
+    try {
+        $entry = $zip.GetEntry('RDPWInst.exe')
+        if (-not $entry) { throw 'Official release has no resource executable.' }
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,$resourceExe,$true)
+    } finally { $zip.Dispose() }
+    if (-not ('ToolkitRdpResourceReader' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.ComponentModel;
+public static class ToolkitRdpResourceReader {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern IntPtr FindResource(IntPtr module, string name, IntPtr type);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr LoadResource(IntPtr module, IntPtr resource);
+    [DllImport("kernel32.dll")] static extern IntPtr LockResource(IntPtr resource);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern uint SizeofResource(IntPtr module, IntPtr resource);
+    [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
+    public static void Extract(string path, string name, string destination) {
+        // Load only as data/image resources. Never execute the installer entry point.
+        IntPtr module = LoadLibraryEx(path, IntPtr.Zero, 2 | 32);
+        if (module == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        try {
+            IntPtr info = FindResource(module, name, new IntPtr(10));
+            if (info == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            uint size = SizeofResource(module, info);
+            IntPtr data = LockResource(LoadResource(module, info));
+            if (data == IntPtr.Zero || size == 0 || size > 16*1024*1024) throw new IOException("Invalid DLL resource.");
+            byte[] bytes = new byte[(int)size];
+            Marshal.Copy(data, bytes, 0, bytes.Length);
+            File.WriteAllBytes(destination, bytes);
+        } finally { FreeLibrary(module); }
+    }
+}
+'@ -ErrorAction Stop
+    }
+    $dll = Join-Path $Directory 'candidate.dll'
+    $resource = if ($Architecture -eq 'AMD64') {'rdpw64'} else {'rdpw32'}
+    [ToolkitRdpResourceReader]::Extract($resourceExe,$resource,$dll)
+    if ((Get-ToolkitPeArchitecture $dll) -ne $Architecture) { throw 'Extracted DLL architecture mismatch.' }
+    return $dll
+}
+
+function Invoke-ToolkitRdpWrapper {
+    param([switch]$UpdateOnly)
+    $dir = Join-Path $env:ProgramFiles 'RDP Wrapper'
+    $backup = Join-Path $env:ProgramData ('ITToolkit\RDP\' + [guid]::NewGuid().ToString('N'))
+    $changed = $false
+    $firewallCreated = $false
+    $ruleName = 'ITToolkit-RDP-' + [guid]::NewGuid().ToString('N')
+    $entries = @(
+        @{Path='HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'; Name='fDenyTSConnections'; Value=0; Type='DWord'},
+        @{Path='HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'; Name='UserAuthentication'; Value=1; Type='DWord'},
+        @{Path='HKLM:\SYSTEM\CurrentControlSet\Services\TermService\Parameters'; Name='ServiceDll'; Value=(Join-Path $dir 'rdpwrap.dll'); Type='ExpandString'}
+    )
+    $snapshot = @()
+    $files = @()
+    try {
+        New-Item -ItemType Directory -Path $backup -Force -ErrorAction Stop | Out-Null
+        $service = Get-Service -Name TermService -ErrorAction Stop
+        $wasRunning = $service.Status -eq 'Running'
+        $startup = (Get-CimInstance -ClassName Win32_Service -Filter "Name='TermService'" -ErrorAction Stop).StartMode
+        if ($UpdateOnly -and -not (Test-Path -LiteralPath (Join-Path $dir 'rdpwrap.dll'))) { throw 'Install RDP Wrapper before updating its definitions.' }
+        foreach ($entry in $entries) {
+            $key = Get-Item -LiteralPath $entry.Path -ErrorAction Stop
+            $exists = $key.GetValueNames() -contains $entry.Name
+            $snapshot += [pscustomobject]@{Path=$entry.Path; Name=$entry.Name; Exists=$exists; Value=$(if ($exists) {$key.GetValue($entry.Name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}); Type=$(if ($exists) {[string]$key.GetValueKind($entry.Name)})}
+        }
+        foreach ($name in @('rdpwrap.dll','rdpwrap.ini')) {
+            $path = Join-Path $dir $name
+            $exists = Test-Path -LiteralPath $path -PathType Leaf
+            if ($exists) { Copy-Item -LiteralPath $path -Destination (Join-Path $backup $name) -ErrorAction Stop }
+            $files += [pscustomobject]@{Name=$name; Exists=$exists}
+        }
+        [pscustomobject]@{Registry=$snapshot; Files=$files; Startup=$startup; WasRunning=$wasRunning; FirewallRule=$ruleName} |
+            Export-Clixml -LiteralPath (Join-Path $backup 'state.xml') -ErrorAction Stop
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $nativeArch = if ($env:PROCESSOR_ARCHITEW6432) {$env:PROCESSOR_ARCHITEW6432} else {$env:PROCESSOR_ARCHITECTURE}
+        $dll = Join-Path $backup 'candidate.dll'
+        if (Test-Path -LiteralPath (Join-Path $dir 'rdpwrap.dll')) {
+            Copy-Item -LiteralPath (Join-Path $dir 'rdpwrap.dll') -Destination $dll -ErrorAction Stop
+        } else {
+            $dll = Get-ToolkitRdpWrapperDll -Directory $backup -Architecture $nativeArch
+        }
+        if ((Get-ToolkitPeArchitecture $dll) -ne $nativeArch) { throw 'Wrapper DLL architecture does not match Windows.' }
+        $ini = Join-Path $backup 'candidate.ini'
+        $valid = $false
+        foreach ($url in @('https://raw.githubusercontent.com/sebaxakerhtc/rdpwrap.ini/master/rdpwrap.ini','https://raw.githubusercontent.com/affinityvr/rdpwrap.ini/master/rdpwrap.ini','https://raw.githubusercontent.com/stascorp/rdpwrap/master/res/rdpwrap.ini')) {
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $ini -UseBasicParsing -ErrorAction Stop
+                if (-not (Select-String -LiteralPath $ini -Pattern '^\[Main\]' -Quiet)) { throw 'Invalid wrapper definitions.' }
+                $valid = $true; break
+            } catch { Write-Host "[WARN] Definition download failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+        }
+        if (-not $valid) { throw 'No valid definitions downloaded; configuration was not changed.' }
+        $changed = $true
+        Stop-Service -Name TermService -Force -ErrorAction Stop
+        New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+        if (-not $UpdateOnly) { Copy-Item -LiteralPath $dll -Destination (Join-Path $dir 'rdpwrap.dll') -Force -ErrorAction Stop }
+        Copy-Item -LiteralPath $ini -Destination (Join-Path $dir 'rdpwrap.ini') -Force -ErrorAction Stop
+        if (-not $UpdateOnly) {
+            foreach ($entry in $entries) {
+                New-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -Value $entry.Value -PropertyType $entry.Type -Force -ErrorAction Stop | Out-Null
+                if ((Get-ItemPropertyValue -LiteralPath $entry.Path -Name $entry.Name -ErrorAction Stop) -ne $entry.Value) { throw "Registry verification failed: $($entry.Name)" }
+            }
+            New-NetFirewallRule -Name $ruleName -DisplayName 'IT Toolkit RDP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -Profile Domain,Private -ErrorAction Stop | Out-Null
+            $firewallCreated = $true
+            Set-Service -Name TermService -StartupType Automatic -ErrorAction Stop
+        }
+        Start-Service -Name TermService -ErrorAction Stop
+        (Get-Service TermService -ErrorAction Stop).WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
+        if (-not (Test-NetConnection -ComputerName '127.0.0.1' -Port 3389 -InformationLevel Quiet -WarningAction SilentlyContinue -ErrorAction Stop)) { throw 'TermService started, but no RDP listener was verified.' }
+        Write-Host "[OK] TermService and local RDP listener verified. Test a real remote login. Recovery snapshot: $backup" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "[ERROR] RDP operation failed: $($_.Exception.Message)" -ForegroundColor Red
+        if ($changed) {
+            $recoveryErrors = @()
+            try { Stop-Service -Name TermService -Force -ErrorAction Stop }
+            catch { $recoveryErrors += "Stop service: $($_.Exception.Message)" }
+            foreach ($file in $files) {
+                try {
+                    $path = Join-Path $dir $file.Name
+                    if ($file.Exists) { Copy-Item -LiteralPath (Join-Path $backup $file.Name) -Destination $path -Force -ErrorAction Stop }
+                    elseif (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+                } catch { $recoveryErrors += "File $($file.Name): $($_.Exception.Message)" }
+            }
+            foreach ($entry in $snapshot) {
+                try {
+                    if ($entry.Exists) { New-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -Value $entry.Value -PropertyType $entry.Type -Force -ErrorAction Stop | Out-Null }
+                    elseif ((Get-Item -LiteralPath $entry.Path -ErrorAction Stop).GetValueNames() -contains $entry.Name) { Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction Stop }
+                } catch { $recoveryErrors += "Registry $($entry.Name): $($_.Exception.Message)" }
+            }
+            if ($firewallCreated) {
+                try { Remove-NetFirewallRule -Name $ruleName -ErrorAction Stop }
+                catch { $recoveryErrors += "Firewall: $($_.Exception.Message)" }
+            }
+            try {
+                $startupType = switch ($startup) {'Auto' {'Automatic'} 'Manual' {'Manual'} 'Disabled' {'Disabled'} default {throw 'Unknown original service startup mode.'}}
+                Set-Service -Name TermService -StartupType $startupType -ErrorAction Stop
+            } catch { $recoveryErrors += "Startup: $($_.Exception.Message)" }
+            if ($wasRunning) {
+                try {
+                    Start-Service -Name TermService -ErrorAction Stop
+                    (Get-Service TermService -ErrorAction Stop).WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
+                } catch { $recoveryErrors += "Restart service: $($_.Exception.Message)" }
+            }
+            if ($recoveryErrors.Count -eq 0) {
+                Write-Host '[RESTORED] Previous RDP configuration restored.' -ForegroundColor Yellow
+            } else { Write-Host "[ACTION] Recovery incomplete: $($recoveryErrors -join '; '). Snapshot: $backup" -ForegroundColor Red }
+        }
+        return $false
+    }
+}
+
+function Get-ToolkitPrinterInventory {
+    @(
+        Get-Printer -ErrorAction SilentlyContinue | ForEach-Object {
+            [pscustomobject]@{
+                Name      = $_.Name
+                Shared    = [bool]$_.Shared
+                ShareName = $_.ShareName
+                Driver    = $_.DriverName
+                Port      = $_.PortName
+                Status    = $_.PrinterStatus
+            }
+        }
+    )
+}
+
+function Get-ToolkitDefaultPrinterShareName {
+    param([Parameter(Mandatory = $true)][string]$PrinterName)
+
+    $shareName = ($PrinterName -replace '[\\/:*?"<>|]', '_').Trim()
+    if ([string]::IsNullOrWhiteSpace($shareName)) { $shareName = 'SharedPrinter' }
+    if ($shareName.Length -gt 80) { $shareName = $shareName.Substring(0, 80).Trim() }
+    return $shareName
+}
+
+function Test-ToolkitPrinterShareName {
+    param([string]$ShareName)
+
+    return -not [string]::IsNullOrWhiteSpace($ShareName) -and
+        $ShareName -notmatch '[\\/:*?"<>|]' -and
+        $ShareName -notmatch '^(\.|\.\.)$'
+}
+
+function Enable-ToolkitPrinterSharingFirewall {
+    # Prefer the firewall cmdlets so we can avoid enabling printer sharing on
+    # Public profiles. Fall back to netsh on older Windows builds.
+    $rules = @(
+        Get-NetFirewallRule -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.DisplayGroup -match 'File\s+and\s+Printer\s+Sharing|Printer\s+Sharing' -or
+                $_.Group -match 'FileAndPrinterSharing'
+            }
+    )
+    if ($rules.Count -gt 0) {
+        try {
+            $rules | Set-NetFirewallRule -Enabled True -Profile Domain,Private -ErrorAction Stop
+            return $true
+        } catch {
+            Write-Host "[WARN] Could not scope printer-sharing firewall rules to Domain/Private profiles: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=Yes >$null 2>&1
+    if ($LASTEXITCODE -eq 0) { return $true }
+    return $false
+}
+
+function Set-ToolkitPrinterShare {
+    param(
+        [Parameter(Mandatory = $true)][string]$PrinterName,
+        [Parameter(Mandatory = $true)][string]$ShareName
+    )
+
+    if (-not (Test-ToolkitPrinterShareName -ShareName $ShareName)) {
+        Write-Host '[ERROR] Invalid share name. Do not use \\, /, :, *, ?, " < > or |.' -ForegroundColor Red
+        return $false
+    }
+
+    $printer = Get-Printer -Name $PrinterName -ErrorAction SilentlyContinue
+    if (-not $printer) {
+        Write-Host "[ERROR] Printer '$PrinterName' was not found on this PC." -ForegroundColor Red
+        return $false
+    }
+
+    $conflict = Get-Printer -ErrorAction SilentlyContinue |
+        Where-Object { $_.Shared -and $_.ShareName -eq $ShareName -and $_.Name -ne $PrinterName } |
+        Select-Object -First 1
+    if ($conflict) {
+        Write-Host "[ERROR] Share name '$ShareName' is already used by '$($conflict.Name)'." -ForegroundColor Red
+        return $false
+    }
+
+    try {
+        $spooler = Get-Service -Name spooler -ErrorAction Stop
+        if ($spooler.Status -ne 'Running') {
+            Set-Service -Name spooler -StartupType Automatic -ErrorAction Stop
+            Start-Service -Name spooler -ErrorAction Stop
+        }
+        Set-Printer -Name $PrinterName -Shared $true -ShareName $ShareName -ErrorAction Stop
+        if (-not (Enable-ToolkitPrinterSharingFirewall)) {
+            Write-Host '[WARN] Printer sharing was enabled, but the firewall rule could not be verified.' -ForegroundColor Yellow
+        }
+
+        $verify = Get-Printer -Name $PrinterName -ErrorAction Stop
+        if (-not $verify.Shared -or $verify.ShareName -ne $ShareName) {
+            throw 'Windows did not report the expected shared-printer state.'
+        }
+        Write-Host "[OK] Host printer share created: \\$env:COMPUTERNAME\$ShareName" -ForegroundColor Green
+        Write-Host '     Clients can connect using the host name or a stable IP address.' -ForegroundColor Gray
+        return $true
+    } catch {
+        Write-Host "[ERROR] Could not share printer '$PrinterName': $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
 function Get-ToolkitPerformanceHardware {
     $drive = $env:SystemDrive.TrimEnd(':')
     $media = 'Unknown'
@@ -326,6 +752,7 @@ function Install-ToolkitAgent {
     $partialExe = "$stagedExe.partial"
     $copyVerified = $false
     $retainStage = $false
+    $meshSettings = $null
     try {
         New-Item -ItemType Directory -Path $stage -Force -ErrorAction Stop | Out-Null
         $sourceFile = Get-Item -LiteralPath $Installer -ErrorAction Stop
@@ -335,15 +762,32 @@ function Install-ToolkitAgent {
         $copiedFile = Get-Item -LiteralPath $partialExe -ErrorAction Stop
         $sourceHash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256 -ErrorAction Stop).Hash
         $copiedHash = (Get-FileHash -LiteralPath $partialExe -Algorithm SHA256 -ErrorAction Stop).Hash
-        if ($copiedFile.Length -ne $sourceFile.Length -or $copiedHash -ne $sourceHash) {
+        if ($sourceFile.Length -le 0 -or $copiedFile.Length -ne $sourceFile.Length -or $copiedHash -ne $sourceHash) {
             throw 'The staged installer does not match the source file (size/SHA-256 verification failed).'
         }
         Move-Item -LiteralPath $partialExe -Destination $stagedExe -ErrorAction Stop
         $copyVerified = $true
+        $exeArch = Get-ToolkitPeArchitecture -Path $stagedExe
+        $osArch = if ($env:PROCESSOR_ARCHITEW6432) {$env:PROCESSOR_ARCHITEW6432} else {$env:PROCESSOR_ARCHITECTURE}
+        if ($exeArch -ne $osArch -and -not ($exeArch -eq 'x86' -and $osArch -eq 'AMD64')) { throw "Installer architecture $exeArch is incompatible with Windows $osArch." }
+        if ($ServiceName -eq 'Mesh Agent') {
+            if ($exeArch -ne $osArch) { throw 'Download the native Mesh agent for this Windows architecture.' }
+            $sourceMsh = [IO.Path]::ChangeExtension($Installer,'.msh')
+            $stagedMsh = [IO.Path]::ChangeExtension($stagedExe,'.msh')
+            if (Test-Path -LiteralPath $sourceMsh -PathType Leaf) {
+                Copy-Item -LiteralPath $sourceMsh -Destination $stagedMsh -ErrorAction Stop
+                if ((Get-FileHash -LiteralPath $sourceMsh -Algorithm SHA256 -ErrorAction Stop).Hash -ne (Get-FileHash -LiteralPath $stagedMsh -Algorithm SHA256 -ErrorAction Stop).Hash) { throw 'Mesh sidecar configuration copy failed verification.' }
+                $meshSettings = Get-ToolkitMeshSettings $stagedMsh
+                $Arguments += ' --copy-msh=1'
+            } else { $meshSettings = Get-ToolkitMeshSettings $stagedExe }
+            if ($meshSettings.meshServiceName) { $ServiceName = $meshSettings.meshServiceName }
+        }
         Write-Host '      [OK] Installer copied and SHA-256 verified. USB can now be ejected.' -ForegroundColor Green
         Write-Host "      [Executing] Launching the verified local copy: $stagedExe" -ForegroundColor Yellow
         $process = Start-Process -FilePath $stagedExe -ArgumentList $Arguments -Wait -PassThru -ErrorAction Stop
         if ($process.ExitCode -eq 3010) {
+            $retainStage = $true
+            Write-Host "[DIAGNOSTIC] Installer retained at $stagedExe" -ForegroundColor Yellow
             Write-Host '[PENDING] Installer returned 3010 and requires a reboot; no reboot was triggered.' -ForegroundColor Yellow
             return $false
         }
@@ -359,10 +803,11 @@ function Install-ToolkitAgent {
         }
         $service = Get-Service -Name $service.Name -ErrorAction Stop
         $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
+        if ($meshSettings) { Test-ToolkitMeshRuntime -ServiceName $ServiceName -Expected $meshSettings -Stage $stage }
         if ($ServiceName -eq 'LansweeperAgentService') {
             Repair-ToolkitLsAgentService | Out-Null
         }
-        Write-Host "[OK] $($service.DisplayName) is installed and running. Server check-in still requires verification." -ForegroundColor Green
+        Write-Host "[OK] $ServiceName is installed and running. Server check-in is not yet verified." -ForegroundColor Green
         return $true
     } catch {
         Write-Host "[ERROR] Agent installation not verified: $($_.Exception.Message)" -ForegroundColor Red
@@ -374,7 +819,11 @@ function Install-ToolkitAgent {
     } finally {
         if (Test-Path -LiteralPath $partialExe) { Remove-Item -LiteralPath $partialExe -Force -ErrorAction SilentlyContinue }
         if (-not $retainStage -and (Test-Path -LiteralPath $stage)) {
-            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+            $stageFull = [IO.Path]::GetFullPath($stage)
+            $tempRoot = [IO.Path]::GetFullPath("$env:SystemDrive\Temp").TrimEnd('\') + '\'
+            if ($stageFull.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -and (Split-Path $stageFull -Leaf) -like 'ToolkitAgent-*') {
+                Remove-Item -LiteralPath $stageFull -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
@@ -655,111 +1104,6 @@ function Find-ToolkitInstaller {
     return $null
 }
 
-function Get-ToolkitPrinterInventory {
-    @(
-        Get-Printer -ErrorAction SilentlyContinue | ForEach-Object {
-            [pscustomobject]@{
-                Name      = $_.Name
-                Shared    = [bool]$_.Shared
-                ShareName = $_.ShareName
-                Driver    = $_.DriverName
-                Port      = $_.PortName
-                Status    = $_.PrinterStatus
-            }
-        }
-    )
-}
-
-function Get-ToolkitDefaultPrinterShareName {
-    param([Parameter(Mandatory = $true)][string]$PrinterName)
-
-    $shareName = ($PrinterName -replace '[\\/:*?"<>|]', '_').Trim()
-    if ([string]::IsNullOrWhiteSpace($shareName)) { $shareName = 'SharedPrinter' }
-    if ($shareName.Length -gt 80) { $shareName = $shareName.Substring(0, 80).Trim() }
-    return $shareName
-}
-
-function Test-ToolkitPrinterShareName {
-    param([string]$ShareName)
-
-    return -not [string]::IsNullOrWhiteSpace($ShareName) -and
-        $ShareName -notmatch '[\\/:*?"<>|]' -and
-        $ShareName -notmatch '^(\.|\.\.)$'
-}
-
-function Enable-ToolkitPrinterSharingFirewall {
-    # Prefer the firewall cmdlets so we can avoid enabling printer sharing on
-    # Public profiles. Fall back to netsh on older Windows builds.
-    $rules = @(
-        Get-NetFirewallRule -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.DisplayGroup -match 'File\s+and\s+Printer\s+Sharing|Printer\s+Sharing' -or
-                $_.Group -match 'FileAndPrinterSharing'
-            }
-    )
-    if ($rules.Count -gt 0) {
-        try {
-            $rules | Set-NetFirewallRule -Enabled True -Profile Domain,Private -ErrorAction Stop
-            return $true
-        } catch {
-            Write-Host "[WARN] Could not scope printer-sharing firewall rules to Domain/Private profiles: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-
-    netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=Yes >$null 2>&1
-    if ($LASTEXITCODE -eq 0) { return $true }
-    return $false
-}
-
-function Set-ToolkitPrinterShare {
-    param(
-        [Parameter(Mandatory = $true)][string]$PrinterName,
-        [Parameter(Mandatory = $true)][string]$ShareName
-    )
-
-    if (-not (Test-ToolkitPrinterShareName -ShareName $ShareName)) {
-        Write-Host '[ERROR] Invalid share name. Do not use \\, /, :, *, ?, " < > or |.' -ForegroundColor Red
-        return $false
-    }
-
-    $printer = Get-Printer -Name $PrinterName -ErrorAction SilentlyContinue
-    if (-not $printer) {
-        Write-Host "[ERROR] Printer '$PrinterName' was not found on this PC." -ForegroundColor Red
-        return $false
-    }
-
-    $conflict = Get-Printer -ErrorAction SilentlyContinue |
-        Where-Object { $_.Shared -and $_.ShareName -eq $ShareName -and $_.Name -ne $PrinterName } |
-        Select-Object -First 1
-    if ($conflict) {
-        Write-Host "[ERROR] Share name '$ShareName' is already used by '$($conflict.Name)'." -ForegroundColor Red
-        return $false
-    }
-
-    try {
-        $spooler = Get-Service -Name spooler -ErrorAction Stop
-        if ($spooler.Status -ne 'Running') {
-            Set-Service -Name spooler -StartupType Automatic -ErrorAction Stop
-            Start-Service -Name spooler -ErrorAction Stop
-        }
-        Set-Printer -Name $PrinterName -Shared $true -ShareName $ShareName -ErrorAction Stop
-        if (-not (Enable-ToolkitPrinterSharingFirewall)) {
-            Write-Host '[WARN] Printer sharing was enabled, but the firewall rule could not be verified.' -ForegroundColor Yellow
-        }
-
-        $verify = Get-Printer -Name $PrinterName -ErrorAction Stop
-        if (-not $verify.Shared -or $verify.ShareName -ne $ShareName) {
-            throw 'Windows did not report the expected shared-printer state.'
-        }
-        Write-Host "[OK] Host printer share created: \\$env:COMPUTERNAME\$ShareName" -ForegroundColor Green
-        Write-Host '     Clients can connect using the host name or a stable IP address.' -ForegroundColor Gray
-        return $true
-    } catch {
-        Write-Host "[ERROR] Could not share printer '$PrinterName': $($_.Exception.Message)" -ForegroundColor Red
-        return $false
-    }
-}
-
 function Invoke-ToolkitPrinterConnectionDiagnostic {
     param([string]$HostName, [string]$ShareName, [System.Management.Automation.ErrorRecord]$ConnectionError)
     if (-not $HostName) { $HostName = (Read-Host 'Nama atau IP PC host').Trim().Trim('\') }
@@ -962,7 +1306,7 @@ while ($true) {
     Write-Host "   [5] Network & DHCP Recovery       (Fix 169.254 APIPA, Stack Reset, Export Diagnostics)"
     Write-Host "   [6] Windows Update Controller     (Dynamic 9999-Day Pause / Resume)"
     Write-Host "   [7] Lansweeper Asset Onboarding   (Hostname Policy, Admin Profile, LsAgent Setup)"
-    Write-Host "   [8] Kaspersky Endpoint Deployment (Legacy AV Remnant Purge & Clean Setup)"
+    Write-Host "   [8] Kaspersky Endpoint Deployment (Verified installer & incompatible AV removal)"
     Write-Host ""
     Write-Host "  [ COMPLIANCE & TELEMETRY CONTROL ]" -ForegroundColor Yellow
     Write-Host "   [9] Software Telemetry Blocker    (AutoCAD All Versions, EaseUS Suite, Hosts & Firewall)"
@@ -983,7 +1327,7 @@ while ($true) {
         "13" {
             Write-Host 'Use the Windows agent downloaded from DOK Office PCs at https://192.168.10.160:4443/.' -ForegroundColor Cyan
             Write-Host 'This enables persistent remote management. No firewall or admin-account changes are made here.' -ForegroundColor Yellow
-            $meshInstaller = Read-Host 'Full path to the group-specific installer for this CPU architecture'
+            $meshInstaller = (Read-Host 'Full path to the group-specific installer for this CPU architecture').Trim().Trim('"')
             if ((Test-Path -LiteralPath $meshInstaller -PathType Leaf) -and ((Read-Host 'Install this trusted agent? Type YES') -ceq 'YES')) {
                 $meshInstalled = Install-ToolkitAgent -Installer $meshInstaller -Arguments '-fullinstall' -ServiceName 'Mesh Agent'
                 if ($meshInstalled) { Write-Host 'Verify this PC is Online in the DOK Office PCs dashboard.' -ForegroundColor Yellow }
@@ -1998,63 +2342,6 @@ while ($true) {
             }
             if (-not $sourceChoice) { $sourceChoice = "1" }
 
-            # 0. Deep Clean Incompatible Antivirus Remnants from WMI, Services & Registry
-            Write-Host "      [Cleaning] Purging leftover third-party Antivirus remnants (360, AVG, Avast, Smadav, McAfee, Norton, Bitdefender, ESET, Malwarebytes, Avira, Sophos, TrendMicro, Webroot)..." -ForegroundColor Gray
-            
-            # Stop and remove leftover services
-            $avPatterns = @(
-                '*360*', '*Qihu*', '*ZhuDong*', '*AVG*', '*Avast*', '*Smadav*', '*McAfee*', '*Norton*', '*Symantec*',
-                '*Bitdefender*', '*ESET*', '*ekrn*', '*Malwarebytes*', '*MBAM*', '*Avira*', '*Sophos*', '*TrendMicro*',
-                '*Webroot*', '*WRSA*', '*Panda*', '*Baidu*', '*PCMatic*', '*BullGuard*', '*F-Secure*', '*Cylance*',
-                '*SentinelOne*', '*TotalAV*', '*K7AntiVirus*', '*RAV*', '*Reason*'
-            )
-            Get-Service | Where-Object { 
-                $name = $_.Name; $disp = $_.DisplayName
-                ($avPatterns | Where-Object { $name -like $_ -or $disp -like $_ })
-            } | ForEach-Object {
-                Stop-Service -Name $_.Name -Force -ErrorAction SilentlyContinue
-                sc.exe delete $_.Name >$null 2>&1
-            }
-
-            # Unregister non-Microsoft & non-Kaspersky products from Windows Security Center WMI
-            try {
-                Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName "AntivirusProduct" -ErrorAction SilentlyContinue | 
-                Where-Object { $_.displayName -notlike "*Defender*" -and $_.displayName -notlike "*Kaspersky*" } | 
-                Remove-CimInstance -ErrorAction SilentlyContinue
-            } catch {}
-
-            # Remove leftover legacy registry keys
-            $oldAvRegs = @(
-                "HKLM:\SOFTWARE\360Safe", "HKLM:\SOFTWARE\WOW6432Node\360Safe",
-                "HKLM:\SOFTWARE\Qihoo", "HKLM:\SOFTWARE\WOW6432Node\Qihoo",
-                "HKLM:\SOFTWARE\AVG", "HKLM:\SOFTWARE\WOW6432Node\AVG",
-                "HKLM:\SOFTWARE\Avast Software", "HKLM:\SOFTWARE\WOW6432Node\Avast Software",
-                "HKLM:\SOFTWARE\Smadav", "HKLM:\SOFTWARE\WOW6432Node\Smadav",
-                "HKLM:\SOFTWARE\McAfee", "HKLM:\SOFTWARE\WOW6432Node\McAfee",
-                "HKLM:\SOFTWARE\Norton", "HKLM:\SOFTWARE\WOW6432Node\Norton",
-                "HKLM:\SOFTWARE\Symantec", "HKLM:\SOFTWARE\WOW6432Node\Symantec",
-                "HKLM:\SOFTWARE\Bitdefender", "HKLM:\SOFTWARE\WOW6432Node\Bitdefender",
-                "HKLM:\SOFTWARE\ESET", "HKLM:\SOFTWARE\WOW6432Node\ESET",
-                "HKLM:\SOFTWARE\Malwarebytes", "HKLM:\SOFTWARE\WOW6432Node\Malwarebytes",
-                "HKLM:\SOFTWARE\Avira", "HKLM:\SOFTWARE\WOW6432Node\Avira",
-                "HKLM:\SOFTWARE\Sophos", "HKLM:\SOFTWARE\WOW6432Node\Sophos",
-                "HKLM:\SOFTWARE\TrendMicro", "HKLM:\SOFTWARE\WOW6432Node\TrendMicro",
-                "HKLM:\SOFTWARE\WRSA", "HKLM:\SOFTWARE\WOW6432Node\WRSA",
-                "HKLM:\SOFTWARE\Panda Software", "HKLM:\SOFTWARE\WOW6432Node\Panda Software",
-                "HKLM:\SOFTWARE\BaiduSecurity", "HKLM:\SOFTWARE\WOW6432Node\BaiduSecurity",
-                "HKLM:\SOFTWARE\BullGuard", "HKLM:\SOFTWARE\WOW6432Node\BullGuard",
-                "HKLM:\SOFTWARE\F-Secure", "HKLM:\SOFTWARE\WOW6432Node\F-Secure",
-                "HKLM:\SOFTWARE\Cylance", "HKLM:\SOFTWARE\WOW6432Node\Cylance",
-                "HKLM:\SOFTWARE\SentinelOne", "HKLM:\SOFTWARE\WOW6432Node\SentinelOne",
-                "HKLM:\SOFTWARE\TotalAV", "HKLM:\SOFTWARE\WOW6432Node\TotalAV",
-                "HKLM:\SOFTWARE\RAV", "HKLM:\SOFTWARE\WOW6432Node\RAV",
-                "HKLM:\SOFTWARE\Reason Labs", "HKLM:\SOFTWARE\WOW6432Node\Reason Labs",
-                "HKLM:\SOFTWARE\Reason Cybersecurity", "HKLM:\SOFTWARE\WOW6432Node\Reason Cybersecurity"
-            )
-            foreach ($rPath in $oldAvRegs) {
-                if (Test-Path $rPath) { Remove-Item -Path $rPath -Recurse -Force -ErrorAction SilentlyContinue }
-            }
-
             $localInstaller = "D:\Sharing\Software\Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe"
             $uncInstaller   = $null
             $kesArgs        = ""
@@ -2097,7 +2384,7 @@ while ($true) {
                 }
             }
 
-            $tempInstaller = Join-Path "$env:SystemDrive\Temp" "KES14_Setup_$PID.exe"
+            $tempInstaller = Join-Path "$env:SystemDrive\Temp" ('KES14_Setup_' + [guid]::NewGuid().ToString('N') + '.exe')
             $partialInstaller = "$tempInstaller.partial"
             $targetInstallerToRun = $null
             $installSucceeded = $false
@@ -2108,12 +2395,13 @@ while ($true) {
                     Write-Host "      [$sourceLabel] Copying installer to $tempInstaller ..." -ForegroundColor Gray
                     Copy-Item -LiteralPath $sourceInstaller -Destination $partialInstaller -Force -ErrorAction Stop
                     $copiedFile = Get-Item -LiteralPath $partialInstaller -ErrorAction Stop
-                    if ($copiedFile.Length -ne $sourceFile.Length -or
+                    if ($sourceFile.Length -le 0 -or $copiedFile.Length -ne $sourceFile.Length -or
                         (Get-FileHash -LiteralPath $sourceInstaller -Algorithm SHA256 -ErrorAction Stop).Hash -ne
                         (Get-FileHash -LiteralPath $partialInstaller -Algorithm SHA256 -ErrorAction Stop).Hash) {
                         throw 'The copied installer does not match the source file.'
                     }
                     Move-Item -LiteralPath $partialInstaller -Destination $tempInstaller -ErrorAction Stop
+                    Get-ToolkitPeArchitecture -Path $tempInstaller | Out-Null
                     $targetInstallerToRun = $tempInstaller
                     Write-Host '      [OK] Installer copied and verified. USB can now be ejected.' -ForegroundColor Green
                 } catch {
@@ -2124,6 +2412,10 @@ while ($true) {
                 Write-Host "      [ERROR] Kaspersky installer not found for source choice $sourceChoice." -ForegroundColor Red
             }
 
+            if ($targetInstallerToRun -and -not (Test-ToolkitAntivirusReady)) {
+                Write-Host "[DEFERRED] Finish antivirus removal/restart first. Verified Kaspersky installer retained: $tempInstaller" -ForegroundColor Yellow
+                $targetInstallerToRun = $null
+            }
             if ($targetInstallerToRun) {
                 try {
                     Write-Host "      [Executing] Launching Kaspersky installer from $targetInstallerToRun ..." -ForegroundColor Yellow
@@ -2547,7 +2839,7 @@ while ($true) {
                 Write-Host ""
                 Write-Host "   [1] Convert Public Share to Hidden Share ($)  (Invisible in Network View)"
                 Write-Host "   [2] Convert Hidden Share ($) to Public Share  (Visible in Network View)"
-                Write-Host "   [3] Create New Hidden Share ($) from Folder   (Anonymous Full Access)"
+                Write-Host "   [3] Create New Hidden Share ($) from Folder   (Authenticated account; existing NTFS permissions)"
                 Write-Host "   [4] Toggle PC Network Broadcast / Discovery   (Hide/Show PC in Network Tab)"
                 Write-Host "   [5] Flush NetBIOS / SMB Sessions on this PC   (Clear Stale Network Cache)"
                 Write-Host ""
@@ -2562,29 +2854,12 @@ while ($true) {
                 switch ($smbChoice) {
                     "1" {
                         $sName = Read-Host "`nEnter name of share to hide (e.g. Sharing)"
-                        $targetShare = Get-SmbShare -Name $sName -ErrorAction SilentlyContinue
-                        if ($targetShare) {
-                            $sPath = $targetShare.Path
-                            Remove-SmbShare -Name $sName -Force
-                            New-SmbShare -Name "$sName`$" -Path $sPath -FullAccess "Everyone" -Description "Hidden Share" | Out-Null
-                            Write-Host "`n[OK] Share converted to hidden: \\$env:COMPUTERNAME\$sName`$" -ForegroundColor Green
-                        } else {
-                            Write-Host "`n[ERROR] Share '$sName' not found." -ForegroundColor Red
-                        }
+                        Convert-ToolkitSmbShare -Name $sName -NewName "$sName`$" | Out-Null
                         Start-Sleep -Seconds 2
                     }
                     "2" {
                         $sName = Read-Host "`nEnter name of hidden share to unhide (e.g. Sharing$)"
-                        $targetShare = Get-SmbShare -Name $sName -ErrorAction SilentlyContinue
-                        if ($targetShare) {
-                            $sPath = $targetShare.Path
-                            $cleanName = $sName.TrimEnd('$')
-                            Remove-SmbShare -Name $sName -Force
-                            New-SmbShare -Name $cleanName -Path $sPath -FullAccess "Everyone" -Description "Public Share" | Out-Null
-                            Write-Host "`n[OK] Share converted to public: \\$env:COMPUTERNAME\$cleanName" -ForegroundColor Green
-                        } else {
-                            Write-Host "`n[ERROR] Share '$sName' not found." -ForegroundColor Red
-                        }
+                        Convert-ToolkitSmbShare -Name $sName -NewName $sName.TrimEnd('$') | Out-Null
                         Start-Sleep -Seconds 2
                     }
                     "3" {
@@ -2595,12 +2870,17 @@ while ($true) {
                             if ([string]::IsNullOrWhiteSpace($sName)) { $sName = $defaultName }
                             if (-not $sName.EndsWith('$')) { $sName = "$sName`$" }
                             
-                            # Set NTFS Permission for Everyone
-                            icacls "$fPath" /grant "Everyone:(OI)(CI)F" /T /C /Q | Out-Null
-                            icacls "$fPath" /grant "Authenticated Users:(OI)(CI)F" /T /C /Q | Out-Null
-                            
-                            New-SmbShare -Name $sName -Path $fPath -FullAccess "Everyone" -Description "Hidden Share" | Out-Null
-                            Write-Host "`n[OK] Hidden share created: \\$env:COMPUTERNAME\$sName" -ForegroundColor Green
+                            try {
+                                if (-not (Test-Path -LiteralPath $fPath -PathType Container)) { throw 'Select a folder, not a file.' }
+                                if (Get-SmbShare -Name $sName -ErrorAction SilentlyContinue) { throw 'Share name already exists.' }
+                                $account = Read-Host 'Account or group to grant Change access (e.g. HOST\username)'
+                                if ([string]::IsNullOrWhiteSpace($account)) { throw 'An authenticated account or group is required.' }
+                                $sid = (New-Object Security.Principal.NTAccount($account)).Translate([Security.Principal.SecurityIdentifier])
+                                if ($sid.Value -in @('S-1-1-0','S-1-5-7')) { throw 'Everyone/Anonymous is not allowed for this workflow.' }
+                                New-SmbShare -Name $sName -Path $fPath -ChangeAccess $account -Description 'Hidden Share' -ErrorAction Stop | Out-Null
+                                Get-SmbShare -Name $sName -ErrorAction Stop | Out-Null
+                                Write-Host "[OK] Hidden share created: \\$env:COMPUTERNAME\$sName. Existing NTFS permissions still apply." -ForegroundColor Green
+                            } catch { Write-Host "[ERROR] Share creation failed: $($_.Exception.Message)" -ForegroundColor Red }
                         } else {
                             Write-Host "`n[ERROR] Folder '$fPath' does not exist." -ForegroundColor Red
                         }
@@ -2797,90 +3077,11 @@ while ($true) {
                         Start-Sleep -Seconds 2
                     }
                     "3" {
-                        Write-Host "`nSetting up RDP Wrapper for Windows Home Edition..." -ForegroundColor Yellow
-                        $rdpDir = "$env:ProgramFiles\RDP Wrapper"
-                        if (-not (Test-Path $rdpDir)) { New-Item -Path $rdpDir -ItemType Directory -Force | Out-Null }
-
-                        # 1. Enable Registry and Services
-                        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Type DWord -Force
-                        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Type DWord -Force
-                        Set-Service -Name "TermService" -StartupType Automatic -ErrorAction SilentlyContinue
-                        
-                        # 2. Add Windows Defender Exclusion for RDP Wrapper directory
-                        Write-Host "      [1/3] Adding Antivirus / Defender exclusions..." -ForegroundColor Gray
-                        Add-MpPreference -ExclusionPath $rdpDir -ErrorAction SilentlyContinue
-                        Add-MpPreference -ExclusionProcess "rdpwrap.dll" -ErrorAction SilentlyContinue
-
-                        # 3. Download RDP Wrapper binary if missing
-                        $dllPath = "$rdpDir\rdpwrap.dll"
-                        if (-not (Test-Path $dllPath)) {
-                            Write-Host "      [2/3] Downloading rdpwrap.dll from repository..." -ForegroundColor Gray
-                            try {
-                                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-                                Invoke-WebRequest -Uri "https://github.com/stascorp/rdpwrap/raw/master/res/rdpwrap.dll" -OutFile $dllPath -UseBasicParsing -ErrorAction Stop
-                            } catch {
-                                Write-Host "      [WARN] Could not auto-download rdpwrap.dll: $_" -ForegroundColor Red
-                            }
-                        }
-
-                        # 4. Download latest community rdpwrap.ini
-                        Write-Host "      [3/3] Fetching latest community rdpwrap.ini definitions..." -ForegroundColor Gray
-                        $iniUrls = @(
-                            "https://raw.githubusercontent.com/sebaxakerhtc/rdpwrap.ini/master/rdpwrap.ini",
-                            "https://raw.githubusercontent.com/affinityvr/rdpwrap.ini/master/rdpwrap.ini",
-                            "https://raw.githubusercontent.com/stascorp/rdpwrap/master/res/rdpwrap.ini"
-                        )
-                        $iniSuccess = $false
-                        foreach ($url in $iniUrls) {
-                            try {
-                                Invoke-WebRequest -Uri $url -OutFile "$rdpDir\rdpwrap.ini" -UseBasicParsing -ErrorAction Stop
-                                $iniSuccess = $true
-                                break
-                            } catch {}
-                        }
-
-                        # 5. Register Hook & Restart Service
-                        if (Test-Path $dllPath) {
-                            Stop-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
-                            Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\TermService\Parameters" -Name "ServiceDll" -Value $dllPath -Type ExpandString -Force -ErrorAction SilentlyContinue
-                            Start-Service -Name "TermService" -ErrorAction SilentlyContinue
-                        }
-
-                        # Open Firewall
-                        netsh advfirewall firewall set rule group="remote desktop" new enable=Yes >$null 2>&1
-                        netsh advfirewall firewall add rule name="Allow RDP Port 3389" dir=in action=allow protocol=TCP localport=3389 >$null 2>&1
-
-                        Write-Host "`n[OK] RDP Wrapper setup completed for Windows Home!" -ForegroundColor Green
+                        Invoke-ToolkitRdpWrapper | Out-Null
                         Start-Sleep -Seconds 2
                     }
                     "4" {
-                        Write-Host "`nUpdating rdpwrap.ini to latest community version..." -ForegroundColor Yellow
-                        $rdpDir = "$env:ProgramFiles\RDP Wrapper"
-                        if (-not (Test-Path $rdpDir)) { New-Item -Path $rdpDir -ItemType Directory -Force | Out-Null }
-                        
-                        Stop-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
-                        
-                        $iniUrls = @(
-                            "https://raw.githubusercontent.com/sebaxakerhtc/rdpwrap.ini/master/rdpwrap.ini",
-                            "https://raw.githubusercontent.com/affinityvr/rdpwrap.ini/master/rdpwrap.ini"
-                        )
-                        $updated = $false
-                        foreach ($url in $iniUrls) {
-                            try {
-                                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-                                Invoke-WebRequest -Uri $url -OutFile "$rdpDir\rdpwrap.ini" -UseBasicParsing -ErrorAction Stop
-                                $updated = $true
-                                Write-Host "   [OK] Downloaded latest rdpwrap.ini definitions." -ForegroundColor Green
-                                break
-                            } catch {}
-                        }
-
-                        Start-Service -Name "TermService" -ErrorAction SilentlyContinue
-                        if ($updated) {
-                            Write-Host "[OK] rdpwrap.ini updated and TermService restarted." -ForegroundColor Green
-                        } else {
-                            Write-Host "[ERROR] Failed to fetch rdpwrap.ini from community mirrors." -ForegroundColor Red
-                        }
+                        Invoke-ToolkitRdpWrapper -UpdateOnly | Out-Null
                         Start-Sleep -Seconds 2
                     }
                     "5" {

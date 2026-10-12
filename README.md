@@ -80,8 +80,9 @@ Printer sharing uses the host's stable DNS name or DHCP-reserved IP. Same-subnet
 
 #### 8. Kaspersky Endpoint Deployment
 * Copies the installer to local temporary storage and verifies size and SHA-256 before launch, allowing USB removal after verification.
-* Uses the legacy third-party antivirus cleanup: stops/deletes matching services and removes non-Defender/non-Kaspersky Security Center registrations and listed vendor registry keys before installer staging.
-* WARNING: this is not a complete antivirus uninstall. Drivers may remain, and existing protection can be damaged even when Kaspersky installation fails or its installer is missing. Use only on deployment machines with explicit authorization.
+* Stages and verifies a nonempty Windows executable before checking incompatible antivirus. Missing or damaged installers do not trigger antivirus removal.
+* Lists other Security Center products and known antivirus entries in Windows uninstall inventory. Opens Programs and Features for removal through the Windows/vendor uninstaller, then checks again. No service deletion, WMI suppression or vendor registry purge is performed. This keeps the requirement to uninstall other antivirus before Kaspersky without hiding installed drivers.
+* If removal needs a restart, inventory cannot be read, or the technician defers removal, deployment stops and retains the verified installer. Persistent remnants require the vendor removal tool. The inventory is a prerequisite check, not Kaspersky's complete compatibility list; its installer remains authoritative.
 * Failed installers remain available for diagnosis. Exit code 3010 is explicitly reported as requiring a restart, not fully ready protection.
 
 ---
@@ -97,8 +98,8 @@ Printer sharing uses the host's stable DNS name or DHCP-reserved IP. Same-subnet
 ### IV. NETWORKING & REMOTE ACCESS
 
 #### 10. SMB Share & Stealth Manager
-* Converts standard shares to hidden administrative shares (with `$`) and vice-versa.
-* Creates authenticated / anonymous hidden shares with full NTFS permissions.
+* Converts ordinary shares to hidden shares (with `$`) and vice-versa. Hidden names do not grant administrative access. The replacement is created with the original security descriptor, caching, enumeration, encryption, user limit and availability settings, then verified before removing the old share. Special/clustered shares and destination-name collisions are refused.
+* Creates hidden shares with Change access for a selected authenticated account/group. Existing NTFS permissions remain in force; Everyone/Anonymous grants and recursive NTFS permission changes are not offered.
 * Toggles PC visibility in Windows Network Discovery (`FDResPub`).
 * Flushes NetBIOS cache, DNS, and stale SMB client sessions.
 
@@ -108,12 +109,15 @@ Printer sharing uses the host's stable DNS name or DHCP-reserved IP. Same-subnet
 
 #### 12. Remote Desktop (RDP) Manager
 * **Native RDP Toggle**: Enables/disables Remote Desktop server and configures firewall rules.
-* **Windows Home RDP Bypass**: Automatically installs and configures RDP Wrapper with community `rdpwrap.ini` updates.
+* **Windows Home RDP Wrapper**: Stages a valid PE DLL matching native Windows architecture and a definitions file with a Main section before modifying services. For first installation, downloads official v1.6.2, verifies its pinned SHA-256 and reads the x86/x64 DLL from installer resources without executing that installer. ARM64 is outside this installation workflow. Preserves NLA and does not add Defender exclusions. Wrapper support still depends on the installed Windows build and requires a real remote-login test.
+* **Recovery**: Saves previous files, registry values/types and service state under `%ProgramData%\ITToolkit\RDP\<run id>`. Setup uses a dedicated Domain/Private TCP rule. Setup/update failures attempt to restore the previous files, registry, service startup/running state and remove the new rule; incomplete recovery is reported with the snapshot path.
 * **Port Listener Verification**: Live testing on port 3389 and TermService health.
 
 #### 13. MeshAgent Setup (MeshCentral)
 * Automated deployment of MeshCentral remote management agent.
-* Staged local execution with architecture validation and service runtime verification (`Mesh Agent`).
+* Copies the group-specific executable and optional matching `.msh` sidecar to local staging with SHA-256 copy verification. PE validation requires the native Windows architecture. A valid embedded policy or matching sidecar containing MeshID, ServerID and a secure wss MeshServer URL is required. Local-discovery policies are outside this workflow.
+* Runs `-fullinstall` (plus `--copy-msh=1` for a sidecar), checks the exit code, waits for the service and verifies its actual process executable and installed server/group configuration. Supports `meshServiceName` from the policy. A service still running from staging or using another group/server is a failure.
+* Failures and restart-required exit code 3010 retain the staged installer for diagnosis. Local runtime verification does not prove a server connection; confirm this device is Online in the intended MeshCentral dashboard.
 
 ---
 
@@ -133,3 +137,18 @@ This toolkit is designed with enterprise security best practices:
 ## License
 
 Distributed under the [MIT License](LICENSE).
+
+## Local verification
+
+Run the four scripts below in separate PowerShell processes. They extract functions without starting the toolkit menu and use mocks/synthetic fixtures, avoiding real installs or system configuration changes:
+
+```powershell
+powershell.exe -NoProfile -File .\test-performance.ps1
+powershell.exe -NoProfile -File .\test-printer-diagnostics.ps1
+powershell.exe -NoProfile -File .\test-reliability.ps1
+powershell.exe -NoProfile -File .\test-agent-install.ps1
+```
+
+Reliability coverage includes malformed PE/configuration, SMB ACL preservation and failed replacement recovery, antivirus conflict/restart/inventory gates, RDP download failure and listener-triggered rollback, and Mesh install copy/architecture/exit-code/restart/runtime failures. Real Windows share conversion, vendor uninstall, RDP login and MeshCentral check-in need testing on a deployment/test machine.
+
+References: [Microsoft New-SmbShare](https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbshare), [Kaspersky incompatible application removal](https://support.kaspersky.com/help/KSC/14.2/en-US/202480.htm), [MeshAgent policy and installer implementation](https://github.com/Ylianst/MeshAgent/blob/master/meshcore/agentcore.c).
