@@ -8,3 +8,4 @@
 *.txt
 *.conf.lock
 *.lock
+test-*.ps1
