@@ -30,6 +30,7 @@ Batch launchers are not included in this repository. If execution policy blocks 
 
 #### 1. Standard App Deployment (Offline-First Priority)
 * Automated deployment with 3-tier fallback: **Flash Drive / Local Storage -> Winget -> Direct Vendor Download**.
+* **Architecture-Aware (x86 & x64)**: Automatically detects 32-bit (x86) and 64-bit (x64) Windows environments. Delivers native 32-bit packages for 7-Zip, VLC, Adobe Acrobat Reader, and PDF24, while gracefully notifying and providing browser fallbacks for 64-bit-only applications (WhatsApp Desktop, Notion).
 * Software supported: Google Chrome, Adobe Acrobat Reader, PDF24 Creator, WhatsApp Desktop, 7-Zip, VLC Media Player, AnyDesk, Zoom, Notion.
 * Offline and downloaded installers must return 0 (completed) or 3010 (restart required). Failed downloads/installations are reported per application; a failed installer is retained for diagnosis. Installer success is not an independent application health check.
 

@@ -977,10 +977,10 @@ function Repair-ToolkitLsAgentConfiguration {
     )
 
     $configPaths = @(
-        (Join-Path ${env:ProgramFiles(x86)} 'LansweeperAgent\LsAgent.ini'),
-        (Join-Path $env:ProgramFiles 'LansweeperAgent\LsAgent.ini'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Lansweeper\Client\LsAgent.ini'),
-        (Join-Path $env:ProgramFiles 'Lansweeper\Client\LsAgent.ini')
+        (if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'LansweeperAgent\LsAgent.ini' }),
+        (if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'LansweeperAgent\LsAgent.ini' }),
+        (if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'Lansweeper\Client\LsAgent.ini' }),
+        (if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Lansweeper\Client\LsAgent.ini' })
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
 
     $configPath = $configPaths | Select-Object -First 1
@@ -1513,6 +1513,11 @@ while ($true) {
         "1" {
             while ($true) {
                 Clear-Host
+                $is64 = ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'AMD64')
+                $sevenZipLabel = if ($is64) { "7-Zip (64-bit)" } else { "7-Zip (32-bit)" }
+                $waLabel = if ($is64) { "WhatsApp Desktop         (Messaging App)" } else { "WhatsApp Web             (WhatsApp Desktop is 64-bit only)" }
+                $notionLabel = if ($is64) { "Notion                   (Notes & Collaboration)" } else { "Notion Web               (Notion Desktop is 64-bit only)" }
+
                 Write-Host "=========================================================================" -ForegroundColor Cyan
                 Write-Host "                    STANDARD APPS INSTALLER MANAGER                      " -ForegroundColor Cyan
                 Write-Host "=========================================================================" -ForegroundColor Cyan
@@ -1523,12 +1528,12 @@ while ($true) {
                 Write-Host "   [1] Google Chrome            (Web Browser)"
                 Write-Host "   [2] Adobe Acrobat Reader DC  (PDF Reader)"
                 Write-Host "   [3] PDF24 Creator            (PDF Tools & Editor)"
-                Write-Host "   [4] WhatsApp Desktop         (Messaging App)"
-                Write-Host "   [5] 7-Zip (64-bit)           (Archive Extractor)"
+                Write-Host "   [4] $waLabel"
+                Write-Host "   [5] $sevenZipLabel           (Archive Extractor)"
                 Write-Host "   [6] VLC Media Player         (Video & Audio Player)"
                 Write-Host "   [7] AnyDesk Remote Desktop   (Remote Support Tool)"
                 Write-Host "   [8] Zoom Workplace           (Video Conferencing)"
-                Write-Host "   [9] Notion                   (Notes & Collaboration)"
+                Write-Host "   [9] $notionLabel"
                 Write-Host ""
                 Write-Host "   [0] Back to Main Menu" -ForegroundColor Red
                 Write-Host "=========================================================================" -ForegroundColor Cyan
@@ -1536,16 +1541,21 @@ while ($true) {
 
                 $appChoice = Read-Host "Select option (A / 1-9 / 0)"
 
+                $acrobatId   = if ($is64) { "Adobe.Acrobat.Reader.64-bit" } else { "Adobe.Acrobat.Reader.32-bit" }
+                $pdf24Url    = if ($is64) { "https://download.pdf24.org/pdf24-creator-11.15.2-x64.exe" } else { "https://download.pdf24.org/old/pdf24-creator-9.2.2.exe" }
+                $sevenZipUrl = if ($is64) { "https://www.7-zip.org/a/7z2408-x64.exe" } else { "https://www.7-zip.org/a/7z2408.exe" }
+                $vlcUrl      = if ($is64) { "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe" } else { "https://get.videolan.org/vlc/3.0.21/win32/vlc-3.0.21-win32.exe" }
+
                 $appDefs = @{
                     "1" = @{ name = "Google Chrome";           id = "Google.Chrome";                  url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"; out = "$env:TEMP\Chrome.exe"; args = "/silent /install" }
-                    "2" = @{ name = "Adobe Acrobat Reader";    id = "Adobe.Acrobat.Reader.64-bit";    url = "https://ardownload2.adobe.com/pub/adobe/reader/win/AcrobatDC/2400120604/AcroRdrDC2400120604_en_US.exe"; out = "$env:TEMP\Acrobat.exe"; args = "/sAll /rs" }
-                    "3" = @{ name = "PDF24 Creator";           id = "geekwright.PDF24";               url = "https://download.pdf24.org/pdf24-creator-11.15.2-x64.exe"; out = "$env:TEMP\PDF24.exe"; args = "/VERYSILENT /NORESTART" }
-                    "4" = @{ name = "WhatsApp Desktop";        id = "WhatsApp.WhatsApp";               url = "https://desktop.whatsapp.com/releases/WinX64/WhatsAppSetup.exe"; out = "$env:TEMP\WA.exe"; args = "/silent" }
-                    "5" = @{ name = "7-Zip";                   id = "7zip.7zip";                      url = "https://www.7-zip.org/a/7z2408-x64.exe"; out = "$env:TEMP\7zip.exe"; args = "/S" }
-                    "6" = @{ name = "VLC Media Player";        id = "VideoLAN.VLC";                   url = "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe"; out = "$env:TEMP\VLC.exe"; args = "/S" }
+                    "2" = @{ name = "Adobe Acrobat Reader";    id = $acrobatId;                       url = "https://ardownload2.adobe.com/pub/adobe/reader/win/AcrobatDC/2400120604/AcroRdrDC2400120604_en_US.exe"; out = "$env:TEMP\Acrobat.exe"; args = "/sAll /rs" }
+                    "3" = @{ name = "PDF24 Creator";           id = "geekwright.PDF24";               url = $pdf24Url; out = "$env:TEMP\PDF24.exe"; args = "/VERYSILENT /NORESTART" }
+                    "4" = @{ name = "WhatsApp Desktop";        id = "WhatsApp.WhatsApp";               url = "https://desktop.whatsapp.com/releases/WinX64/WhatsAppSetup.exe"; out = "$env:TEMP\WA.exe"; args = "/silent"; is64Only = $true }
+                    "5" = @{ name = "7-Zip";                   id = "7zip.7zip";                      url = $sevenZipUrl; out = "$env:TEMP\7zip.exe"; args = "/S" }
+                    "6" = @{ name = "VLC Media Player";        id = "VideoLAN.VLC";                   url = $vlcUrl; out = "$env:TEMP\VLC.exe"; args = "/S" }
                     "7" = @{ name = "AnyDesk";                 id = "AnyDeskSoftwareGmbH.AnyDesk";   url = "https://download.anydesk.com/AnyDesk.exe"; out = "$env:TEMP\AnyDesk.exe"; args = "--install `"C:\Program Files (x86)\AnyDesk`" --start-with-win --silent" }
                     "8" = @{ name = "Zoom";                    id = "Zoom.Zoom";                      url = "https://zoom.us/client/latest/ZoomInstaller.exe"; out = "$env:TEMP\Zoom.exe"; args = "/silent" }
-                    "9" = @{ name = "Notion";                  id = "Notion.Notion";                  url = "https://www.notion.so/desktop/windows/download"; out = "$env:TEMP\Notion.exe"; args = "/S" }
+                    "9" = @{ name = "Notion";                  id = "Notion.Notion";                  url = "https://www.notion.so/desktop/windows/download"; out = "$env:TEMP\Notion.exe"; args = "/S"; is64Only = $true }
                 }
 
                 if ($appChoice -eq "0") {
@@ -1572,6 +1582,15 @@ while ($true) {
                 $failedApps = @()
                 $rebootRequired = $false
                 foreach ($app in $selectedApps) {
+                    if ($app.is64Only -and -not $is64) {
+                        Write-Host "`n[SKIP] $($app.name) is a 64-bit application and is not supported on 32-bit Windows." -ForegroundColor Yellow
+                        if ($app.name -like "*WhatsApp*") {
+                            Write-Host "   [INFO] Use WhatsApp Web in your browser (https://web.whatsapp.com) on 32-bit systems." -ForegroundColor Cyan
+                        } elseif ($app.name -like "*Notion*") {
+                            Write-Host "   [INFO] Use Notion in your browser (https://www.notion.so) on 32-bit systems." -ForegroundColor Cyan
+                        }
+                        continue
+                    }
                     Write-Host "`nProcessing $($app.name)..." -ForegroundColor Yellow
                     
                     $installed = $false
