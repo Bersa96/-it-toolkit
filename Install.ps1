@@ -151,14 +151,19 @@ function Convert-ToolkitSmbShare {
 
 function Get-ToolkitOtherAntivirus {
     # Do not use Win32_Product: querying it can trigger MSI repair.
-    $products = @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntivirusProduct -ErrorAction Stop |
-        Where-Object { $_.displayName -notmatch '(?i)Defender|Kaspersky' } |
-        ForEach-Object { $_.displayName })
+    $products = @()
+    try {
+        $products += @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntivirusProduct -ErrorAction Stop |
+            Where-Object { $_.displayName -notmatch '(?i)Defender|Kaspersky' } |
+            ForEach-Object { $_.displayName })
+    } catch { }
     $vendorPattern = '(?i)\b(360\s*(Total|Safe|Security)|Qihoo|AVG|Avast|Smadav|McAfee|Norton|Symantec|Bitdefender|ESET|Malwarebytes|Avira|Sophos|Trend\s*Micro|Webroot|Panda\s*(Security|Protection)|F-Secure|Cylance|SentinelOne|TotalAV|K7\s*(AntiVirus|Security)|RAV\s*(Antivirus|Endpoint)|Reason\s*(Labs|Cybersecurity))\b'
     foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
         if (Test-Path -LiteralPath $key) {
-            $products += @(Get-ChildItem -LiteralPath $key -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop |
-                Where-Object { $_.DisplayName -match $vendorPattern } | ForEach-Object { $_.DisplayName })
+            try {
+                $products += @(Get-ChildItem -LiteralPath $key -ErrorAction SilentlyContinue | Get-ItemProperty -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -match $vendorPattern } | ForEach-Object { $_.DisplayName })
+            } catch { }
         }
     }
     $products | Sort-Object -Unique
@@ -180,10 +185,21 @@ function Test-ToolkitAntivirusReady {
             }
         }
         foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
-            if (Test-Path -LiteralPath $key) { throw 'Windows restart is pending. Restart and rerun Kaspersky deployment.' }
+            if (Test-Path -LiteralPath $key) {
+                Write-Host '[WARNING] Windows restart is pending from a recent Windows update or servicing operation.' -ForegroundColor Yellow
+                $ans = Read-Host 'Do you want to ignore and continue Kaspersky installation anyway? (Y/N) [Default: N]'
+                if ($ans -notmatch '^(?i)y(es)?$') { throw 'Windows restart is pending. Restart and rerun Kaspersky deployment.' }
+                break
+            }
         }
         $pending = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
-        if ($pending.PendingFileRenameOperations) { throw 'File/driver replacement is pending a restart. Restart before installing Kaspersky.' }
+        if ($pending.PendingFileRenameOperations) {
+            Write-Host '[WARNING] Pending file/driver rename operations detected in Windows Session Manager.' -ForegroundColor Yellow
+            Write-Host '          (This is common after background app updates and usually safe to bypass for Kaspersky).' -ForegroundColor Gray
+            $ans = Read-Host 'Do you want to ignore and continue Kaspersky installation anyway? (Y/N) [Default: Y]'
+            if (-not $ans) { $ans = 'Y' }
+            if ($ans -notmatch '^(?i)y(es)?$') { throw 'File/driver replacement is pending a restart. Restart before installing Kaspersky.' }
+        }
         return $true
     } catch {
         Write-Host "[ERROR] Antivirus prerequisite check did not pass: $($_.Exception.Message)" -ForegroundColor Red
@@ -2550,9 +2566,27 @@ while ($true) {
             $installerName = 'Kaspersky Endpoint Security for Windows 14.0.0 (14.0.0.504).exe'
             $fdInstaller = $null
             $usbDrives = @(Get-PSDrive -PSProvider FileSystem | Where-Object {
-                try { [System.IO.DriveInfo]::new($_.Root).DriveType -eq [System.IO.DriveType]::Removable }
-                catch { $false }
+                try {
+                    $dt = [System.IO.DriveInfo]::new($_.Root).DriveType
+                    $dt -eq [System.IO.DriveType]::Removable -or
+                    ($_.Root -ne "$env:SystemDrive\" -and $PSScriptRoot -and $PSScriptRoot.StartsWith($_.Root, [System.StringComparison]::OrdinalIgnoreCase))
+                } catch { $false }
             })
+            try {
+                $usbDiskNumbers = @(Get-Disk -ErrorAction SilentlyContinue | Where-Object { $_.BusType -eq 'USB' } | Select-Object -ExpandProperty Number)
+                if ($usbDiskNumbers) {
+                    $usbPartitions = @(Get-Partition -ErrorAction SilentlyContinue | Where-Object { $_.DiskNumber -in $usbDiskNumbers -and $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter)
+                    foreach ($let in $usbPartitions) {
+                        $pDrive = Get-PSDrive -Name $let -PSProvider FileSystem -ErrorAction SilentlyContinue
+                        if ($pDrive -and $usbDrives.Name -notcontains $pDrive.Name) {
+                            $usbDrives += $pDrive
+                        }
+                    }
+                }
+            } catch { }
+            if ($usbDrives.Count -eq 0) {
+                $usbDrives = @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -ne "$env:SystemDrive\" })
+            }
             if ($PSScriptRoot) {
                 $usbDrives = @($usbDrives | Sort-Object @{ Expression = { if ($PSScriptRoot.StartsWith($_.Root, [System.StringComparison]::OrdinalIgnoreCase)) { 0 } else { 1 } } }, Name)
             }
@@ -2619,7 +2653,14 @@ while ($true) {
                 try {
                     Write-Host "      [Executing] Launching Kaspersky installer from $targetInstallerToRun ..." -ForegroundColor Yellow
                     $installStartedAt = Get-Date
-                    $proc = Start-Process -FilePath $targetInstallerToRun -Wait -PassThru -ErrorAction Stop
+                    $startParams = @{
+                        FilePath    = $targetInstallerToRun
+                        Wait        = $true
+                        PassThru    = $true
+                        ErrorAction = 'Stop'
+                    }
+                    if ($kesArgs) { $startParams['ArgumentList'] = $kesArgs }
+                    $proc = Start-Process @startParams
                     if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
                         $installSucceeded = $true
                         Write-Host "      [OK] Kaspersky installer completed (ExitCode: $($proc.ExitCode))." -ForegroundColor Green
@@ -2627,14 +2668,26 @@ while ($true) {
                         Remove-Item -LiteralPath $tempInstaller -Force -ErrorAction SilentlyContinue
                     } else {
                         Write-Host "      [ERROR] Kaspersky installer exited with code $($proc.ExitCode). Installer retained at $tempInstaller for diagnosis." -ForegroundColor Red
-                        $packageLog = Join-Path $env:TEMP 'klpkinst.log'
-                        if ($proc.ExitCode -eq 4 -and (Test-Path -LiteralPath $packageLog -PathType Leaf) -and
+                        $possibleLogs = @(
+                            (Join-Path $env:TEMP '$klpkinst.log'),
+                            (Join-Path $env:TEMP 'klpkinst.log'),
+                            (Join-Path "$env:SystemDrive\Windows\Temp" '$klpkinst.log'),
+                            (Join-Path "$env:SystemDrive\Windows\Temp" 'klpkinst.log')
+                        )
+                        $packageLog = $null
+                        foreach ($logCandidate in $possibleLogs) {
+                            if (Test-Path -LiteralPath $logCandidate -PathType Leaf) {
+                                $packageLog = $logCandidate
+                                break
+                            }
+                        }
+                        if ($proc.ExitCode -eq 4 -and $packageLog -and
                             (Get-Item -LiteralPath $packageLog).LastWriteTime -ge $installStartedAt.AddSeconds(-5) -and
                             (Select-String -LiteralPath $packageLog -SimpleMatch 'Bad parameter "VerifyCertDate"' -Quiet)) {
                             Write-Host '      [CAUSE] The stand-alone package certificate is out of date (VerifyCertDate).' -ForegroundColor Red
                             Write-Host '      [ACTION] Regenerate and download a fresh installation package from your Kaspersky console, then replace the old EXE on USB.' -ForegroundColor Yellow
                         }
-                        if (Test-Path -LiteralPath $packageLog -PathType Leaf) {
+                        if ($packageLog -and (Test-Path -LiteralPath $packageLog -PathType Leaf)) {
                             Write-Host "      [LOG] $packageLog" -ForegroundColor Gray
                         }
                     }
@@ -2644,6 +2697,7 @@ while ($true) {
                 }
             }
 
+            Remove-PSDrive -Name 'ToolkitShare' -Force -ErrorAction SilentlyContinue
             if (-not $installSucceeded) { Write-Host "`n[ERROR] Kaspersky task did not complete successfully." -ForegroundColor Red }
             Write-Host "`nPress Enter to return to Main Menu..." -ForegroundColor Yellow
             Read-Host | Out-Null
